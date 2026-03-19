@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 import litellm
@@ -17,6 +18,34 @@ from lookout_tui.clients.protocol import LLMResponse
 logger = logging.getLogger("lookout_tui.clients.litellm")
 
 SUPPORTED_PROVIDERS = ("gemini", "anthropic", "openai")
+
+
+def _airlock_router_config() -> dict[str, Any]:
+    """Return LiteLLM kwargs for Airlock when AIRLOCK_* env vars are set."""
+    host = os.environ.get("AIRLOCK_HOST", "").strip()
+    port = os.environ.get("AIRLOCK_PORT", "").strip()
+    if not host and not port:
+        return {}
+    if not host:
+        host = "localhost"
+    if not port:
+        port = "4000"
+    if host == "0.0.0.0":
+        host = "127.0.0.1"
+
+    config: dict[str, Any] = {
+        "api_base": f"http://{host}:{port}/v1",
+    }
+    api_key = os.environ.get("AIRLOCK_MASTER_KEY", "").strip()
+    if api_key:
+        config["api_key"] = api_key
+
+    airlock_client = os.environ.get("AIRLOCK_CLIENT", "").strip()
+    if airlock_client:
+        config["extra_headers"] = {
+            "X-Airlock-Client": airlock_client,
+        }
+    return config
 
 
 class LiteLLMClient:
@@ -83,6 +112,7 @@ class LiteLLMClient:
                     max_tokens=self.max_tokens,
                     timeout=self.timeout,
                     num_retries=0,
+                    **_airlock_router_config(),
                 )
                 return self._parse_response(response)
             except LiteLLMAuthenticationError as e:

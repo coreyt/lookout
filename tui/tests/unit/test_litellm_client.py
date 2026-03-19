@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -48,6 +49,19 @@ class TestLiteLLMClientPayload:
         assert len(msgs) == 2
         assert msgs[0] == {"role": "system", "content": "You are helpful."}
         assert msgs[1] == {"role": "user", "content": "Hi there"}
+
+    async def test_chat_uses_x_airlock_client_header(self) -> None:
+        client = LiteLLMClient(model="gemini/gemini-3.1-pro")
+        with (
+            patch.dict(os.environ, {"AIRLOCK_HOST": "localhost", "AIRLOCK_PORT": "4000", "AIRLOCK_CLIENT": "lookout-test"}, clear=False),
+            patch(f"{_MOD}.litellm") as mock_litellm,
+        ):
+            mock_litellm.acompletion = AsyncMock(return_value=_mock_response("Hello!"))
+            await client.chat("You are helpful.", "Hi there")
+
+        kw = mock_litellm.acompletion.call_args.kwargs
+        assert kw["api_base"] == "http://localhost:4000/v1"
+        assert kw["extra_headers"]["X-Airlock-Client"] == "lookout-test"
 
     async def test_chat_returns_llm_response(self) -> None:
         client = LiteLLMClient(model="gemini/gemini-3.1-pro")
