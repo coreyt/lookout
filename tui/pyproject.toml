@@ -11,7 +11,7 @@ license = "Elastic-2.0"
 dependencies = [
     "lookout",  # resolved via workspace
     "textual>=0.85.0",
-    "litellm>=1.40.0",
+    "litellm>=1.40.0,!=1.82.7,!=1.82.8",
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "rich>=13.0",
