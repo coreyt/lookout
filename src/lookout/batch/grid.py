@@ -43,9 +43,7 @@ def build_registry_grid(
 
     for spec in patterns:
         pat = spec.pattern
-        variant_map: dict[str, LanguageVariant] = {
-            v.language: v for v in pat.variants
-        }
+        variant_map: dict[str, LanguageVariant] = {v.language: v for v in pat.variants}
 
         for lang in languages:
             lang_variant = variant_map.get(lang)
@@ -64,9 +62,7 @@ def build_registry_grid(
             # Framework cells
             lang_frameworks = frameworks.get(lang, [])
             for fw_name in lang_frameworks:
-                fw_status = _compute_framework_status(
-                    pat, lang_variant, fw_name
-                )
+                fw_status = _compute_framework_status(pat, lang_variant, fw_name)
                 cells.append(
                     RegistryCell(
                         pattern_id=pat.id,
@@ -111,7 +107,11 @@ def _compute_framework_status(
 
     # For framework variants, check if the generic variant is newer
     generic = lang_variant.generic
-    if generic is not None and generic.generation_meta is not None and fw_variant.generation_meta is not None:
+    if (
+        generic is not None
+        and generic.generation_meta is not None
+        and fw_variant.generation_meta is not None
+    ):
         generic_time = _parse_iso(generic.generation_meta.generated_at)
         fw_time = _parse_iso(fw_variant.generation_meta.generated_at)
         if generic_time > fw_time:

@@ -138,9 +138,7 @@ class TestAddLanguageVariant:
         assert result.pattern.variants[0].generic.examples == examples
 
     def test_raises_if_language_already_exists(self) -> None:
-        spec = _make_spec_file(
-            variants=[LanguageVariant(language="python")]
-        )
+        spec = _make_spec_file(variants=[LanguageVariant(language="python")])
         with pytest.raises(LookoutError, match="already exists"):
             add_language_variant(spec, "python", _make_check())
 
@@ -157,9 +155,7 @@ class TestAddLanguageVariant:
 
 class TestAddFrameworkVariant:
     def test_adds_framework_to_existing_language(self) -> None:
-        spec = _make_spec_file(
-            variants=[LanguageVariant(language="python")]
-        )
+        spec = _make_spec_file(variants=[LanguageVariant(language="python")])
         check = _make_check()
         result = add_framework_variant(spec, "python", "django", check)
 
@@ -170,9 +166,7 @@ class TestAddFrameworkVariant:
         assert fw.check == check
 
     def test_adds_with_version_constraint(self) -> None:
-        spec = _make_spec_file(
-            variants=[LanguageVariant(language="python")]
-        )
+        spec = _make_spec_file(variants=[LanguageVariant(language="python")])
         result = add_framework_variant(
             spec, "python", "django", _make_check(), version_constraint=">=4.0"
         )
@@ -204,9 +198,7 @@ class TestAddFrameworkVariant:
             add_framework_variant(spec, "python", "django", _make_check())
 
     def test_original_spec_unchanged(self) -> None:
-        spec = _make_spec_file(
-            variants=[LanguageVariant(language="python")]
-        )
+        spec = _make_spec_file(variants=[LanguageVariant(language="python")])
         add_framework_variant(spec, "python", "django", _make_check())
         assert len(spec.pattern.variants[0].frameworks) == 0
 
@@ -327,7 +319,9 @@ class TestFromValidatedPattern:
             tags=["solid", "di"],
             examples=PatternExamples(
                 good=[PatternExample(language="python", code="def __init__(self, repo): ...")],
-                bad=[PatternExample(language="python", code="def __init__(self): self.repo = Repo()")],
+                bad=[
+                    PatternExample(language="python", code="def __init__(self): self.repo = Repo()")
+                ],
             ),
             references=["https://martinfowler.com/articles/injection.html"],
             discovered_by="test",

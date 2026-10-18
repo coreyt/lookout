@@ -717,8 +717,7 @@ def batch_submit(
         cells = [
             c
             for c in cells
-            if c.status
-            in (CellStatus.MISSING, CellStatus.POSSIBLY_STALE, CellStatus.LIKELY_STALE)
+            if c.status in (CellStatus.MISSING, CellStatus.POSSIBLY_STALE, CellStatus.LIKELY_STALE)
         ]
     elif all_missing:
         cells = [c for c in cells if c.status == CellStatus.MISSING]
@@ -729,9 +728,7 @@ def batch_submit(
 
     missing = sum(1 for c in cells if c.status == CellStatus.MISSING)
     stale = sum(
-        1
-        for c in cells
-        if c.status in (CellStatus.POSSIBLY_STALE, CellStatus.LIKELY_STALE)
+        1 for c in cells if c.status in (CellStatus.POSSIBLY_STALE, CellStatus.LIKELY_STALE)
     )
 
     click.echo(f"{len(cells)} cell(s) selected ({missing} missing, {stale} stale)")

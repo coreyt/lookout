@@ -15,7 +15,7 @@ class AnthropicBatchProvider:
 
     def _get_client(self) -> Any:
         if self._client is None:
-            import anthropic
+            import anthropic  # type: ignore[import-not-found,unused-ignore]
 
             self._client = anthropic.Anthropic()
         return self._client
