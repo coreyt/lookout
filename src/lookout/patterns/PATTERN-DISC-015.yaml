@@ -47,4 +47,13 @@ pattern:
                 class ConfigurationError(LingError):
                     """Invalid configuration."""
                     pass
-          bad: []
+          bad:
+            - language: python
+              code: |
+                class LingError(Exception):
+                    """Base exception for all ling errors."""
+                    pass
+
+                class ConfigurationError(ValueError):
+                    """Invalid configuration."""
+                    pass

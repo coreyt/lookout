@@ -38,7 +38,18 @@ pattern:
 
                 import click
                 click.echo("Output message")
+            - language: python
+              code: |
+                logger = logging.getLogger(__name__)
+                logger.warning("Processing %s", path)
+                console.print("[bold]Done[/bold]")
           bad:
             - language: python
               code: |
                 print("Processing file")
+            - language: python
+              code: |
+                import sys
+
+                def report(msg: str) -> None:
+                    print(msg, file=sys.stderr)

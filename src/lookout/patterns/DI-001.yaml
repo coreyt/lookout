@@ -48,7 +48,12 @@ pattern:
                   - pattern: |
                       class $CLS:
                         def __init__(self, ...):
+                          ...
                           self.$FIELD = $DEP(...)
+                  # Plain value/container constructors are not dependencies.
+                  - metavariable-regex:
+                      metavariable: $DEP
+                      regex: ^(?!(list|dict|set|tuple|str|int|float|bool|bytes|frozenset|Path)$).*
         examples:
           good:
             - language: python
@@ -56,12 +61,32 @@ pattern:
                 class OrderService:
                     def __init__(self, repo: OrderRepository):
                         self._repo = repo
+            - language: python
+              code: |
+                class OrderService:
+                    def __init__(self, repo: OrderRepository, base_dir: str):
+                        super().__init__()
+                        self._repo = repo
+                        self._base_dir = Path(base_dir)
+                        self._cache = dict()
           bad:
             - language: python
               code: |
                 class OrderService:
                     def __init__(self):
                         self._repo = OrderRepository()
+            - language: python
+              code: |
+                class OrderService:
+                    def __init__(self, config):
+                        super().__init__()
+                        self._config = config
+                        self._client = httpx.Client(timeout=config.timeout)
+            - language: python
+              code: |
+                class Worker:
+                    def __init__(self):
+                        self._lock = threading.Lock()
 
       frameworks:
         - name: django
@@ -80,6 +105,7 @@ pattern:
                     - pattern: |
                         class $VIEW(View):
                           def __init__(self, ...):
+                            ...
                             self.$SVC = $SVC_CLASS(...)
           examples:
             good:
@@ -96,6 +122,11 @@ pattern:
                       def __init__(self, **kwargs):
                           super().__init__(**kwargs)
                           self.order_service = OrderService()
+              - language: python
+                code: |
+                  class OrderView(View):
+                      def __init__(self):
+                          self.order_service = services.OrderService()
 
     - language: typescript
       version_constraint: ">=4.0"
@@ -111,12 +142,18 @@ pattern:
                 message: >-
                   Direct dependency instantiation in constructor —
                   use injection instead (DI-001)
-                patterns:
+                pattern-either:
                   - pattern: |
                       class $CLS {
                         constructor(...) {
+                          ...
                           this.$FIELD = new $DEP(...);
+                          ...
                         }
+                      }
+                  - pattern: |
+                      class $CLS {
+                        $FIELD = new $DEP(...);
                       }
         examples:
           good:
@@ -124,6 +161,14 @@ pattern:
               code: |
                 class OrderService {
                   constructor(private readonly repo: OrderRepository) {}
+                }
+            - language: typescript
+              code: |
+                class OrderService {
+                  private repo: OrderRepository;
+                  constructor(repo: OrderRepository) {
+                    this.repo = repo;
+                  }
                 }
           bad:
             - language: typescript
@@ -133,6 +178,20 @@ pattern:
                   constructor() {
                     this.repo = new OrderRepository();
                   }
+                }
+            - language: typescript
+              code: |
+                class OrderService {
+                  private repo: OrderRepository;
+                  constructor(private readonly logger: Logger) {
+                    this.logger.info('init');
+                    this.repo = new OrderRepository();
+                  }
+                }
+            - language: typescript
+              code: |
+                class OrderService {
+                  private readonly repo = new OrderRepository();
                 }
 
       frameworks:
@@ -148,13 +207,20 @@ pattern:
                   message: >-
                     Angular service creates dependency directly —
                     use Angular DI instead (DI-001)
-                  patterns:
+                  pattern-either:
                     - pattern: |
                         @Injectable(...)
                         class $CLS {
                           constructor(...) {
+                            ...
                             this.$FIELD = new $DEP(...);
+                            ...
                           }
+                        }
+                    - pattern: |
+                        @Injectable(...)
+                        class $CLS {
+                          $FIELD = new $DEP(...);
                         }
           examples:
             good:
@@ -172,4 +238,10 @@ pattern:
                     constructor() {
                       this.repo = new OrderRepository();
                     }
+                  }
+              - language: typescript
+                code: |
+                  @Injectable({ providedIn: 'root' })
+                  class OrderService {
+                    private readonly repo = new OrderRepository();
                   }

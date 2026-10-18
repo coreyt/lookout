@@ -46,4 +46,10 @@ pattern:
                     def __init__(self, fetcher: RuleFetcher, cache: CacheManager):
                         self._fetcher = fetcher
                         self._cache = cache
-          bad: []
+          bad:
+            - language: python
+              code: |
+                class RuleProcessor:
+                    def __init__(self):
+                        self._fetcher = RuleFetcher()
+                        self._cache = CacheManager()

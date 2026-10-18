@@ -48,4 +48,9 @@ pattern:
                     def parse_config(self, path: Path) -> list[RuleConfig]:
                         raw_config = self._parser.load(path)
                         return self._convert_to_rules(raw_config)
-          bad: []
+          bad:
+            - language: python
+              code: |
+                class ESLintAdapter:
+                    def __init__(self, config_parser: ConfigParser):
+                        self.parser = config_parser

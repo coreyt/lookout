@@ -9,7 +9,7 @@
 | ARCH-003 | Use Logging Instead of Print Statements | architecture | 1 | forbidden |
 | DI-001 | Dependency Injection via Constructor | architecture | 2 | raw |
 | LAYER-001 | Layered Architecture Import Boundaries | architecture | 2 | raw |
-| REPO-001 | Repository Pattern for Data Access | architecture | 2 | raw/pattern_discovery |
+| REPO-001 | Repository Pattern for Data Access | architecture | 2 | raw |
 
 ### Discovery-Only Patterns
 | ID | Title | Category | Tier | Type |

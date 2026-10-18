@@ -35,15 +35,34 @@ pattern:
 
       generic:
         check:
-          type: "pattern_discovery"
-          patterns:
-            - |
-              class $CLS:
-                def $METHOD(self, ...):
-                  ...
-                  $DB.execute(...)
-            - |
-              cursor.execute(...)
+          type: "raw"
+          config: |
+            rules:
+              - id: repo-001-python-impl
+                languages: [python]
+                severity: WARNING
+                message: >-
+                  Direct data access outside repository class —
+                  use a repository instead (REPO-001)
+                patterns:
+                  - pattern-either:
+                      - pattern: $DB.execute(...)
+                      - pattern: $DB.executemany(...)
+                      - pattern: $DB.query(...)
+                      - pattern: $DB.add(...)
+                      - pattern: $DB.delete(...)
+                  # Only receivers that look like a DB handle (session, db, conn, cursor...).
+                  - metavariable-regex:
+                      metavariable: $DB
+                      regex: (?i)(^|.*[._])(session|db|database|conn|connection|cursor|engine)$
+                  - pattern-not-inside:
+                      patterns:
+                        - pattern: |
+                            class $REPO:
+                              ...
+                        - metavariable-regex:
+                            metavariable: $REPO
+                            regex: (?i).*repository$
         examples:
           good:
             - language: python
@@ -58,12 +77,29 @@ pattern:
 
                     def get_order(self, order_id: str) -> Order:
                         return self._repo.find_by_id(order_id)
+            - language: python
+              code: |
+                class TagService:
+                    def tag(self, name: str) -> None:
+                        self._tags.add(name)
+                        self._queue.delete(name)
           bad:
             - language: python
               code: |
                 class OrderService:
                     def get_order(self, order_id: str) -> Order:
                         return self._session.query(Order).get(order_id)
+            - language: python
+              code: |
+                def list_orders(conn):
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT * FROM orders")
+                    return cursor.fetchall()
+            - language: python
+              code: |
+                class OrderHandler:
+                    def handle(self, order: Order) -> None:
+                        self.db.add(order)
 
       frameworks:
         - name: sqlalchemy
@@ -78,11 +114,25 @@ pattern:
                   message: >-
                     SQLAlchemy session used outside repository class —
                     use a repository instead (REPO-001)
-                  pattern-either:
-                    - pattern: session.query(...)
-                    - pattern: session.execute(...)
-                    - pattern: session.add(...)
-                    - pattern: session.delete(...)
+                  patterns:
+                    - pattern-either:
+                        - pattern: $SESSION.query(...)
+                        - pattern: $SESSION.execute(...)
+                        - pattern: $SESSION.add(...)
+                        - pattern: $SESSION.add_all(...)
+                        - pattern: $SESSION.delete(...)
+                        - pattern: $SESSION.scalars(...)
+                    - metavariable-regex:
+                        metavariable: $SESSION
+                        regex: (?i)(^|.*[._])(session|db_session|db)$
+                    - pattern-not-inside:
+                        patterns:
+                          - pattern: |
+                              class $REPO:
+                                ...
+                          - metavariable-regex:
+                              metavariable: $REPO
+                              regex: (?i).*repository$
           examples:
             good:
               - language: python
@@ -90,27 +140,50 @@ pattern:
                   class OrderRepository:
                       def save(self, order: Order) -> None:
                           self._session.add(order)
+              - language: python
+                code: |
+                  class UserRepository:
+                      def all(self) -> list[User]:
+                          return list(self.session.scalars(select(User)))
             bad:
               - language: python
                 code: |
                   class OrderService:
                       def save_order(self, order: Order) -> None:
                           self._session.add(order)
+              - language: python
+                code: |
+                  def get_user(session, user_id):
+                      return session.execute(select(User).where(User.id == user_id)).one()
 
     - language: typescript
       version_constraint: ">=4.0"
 
       generic:
         check:
-          type: "pattern_discovery"
-          patterns:
-            - |
-              class $CLS {
-                $METHOD(...) {
-                  ...
-                  $DB.query(...);
-                }
-              }
+          type: "raw"
+          config: |
+            rules:
+              - id: repo-001-typescript-impl
+                languages: [typescript]
+                severity: WARNING
+                message: >-
+                  Direct data access outside repository class —
+                  use a repository instead (REPO-001)
+                patterns:
+                  - pattern-either:
+                      - pattern: $DB.query(...)
+                      - pattern: $DB.execute(...)
+                  - metavariable-regex:
+                      metavariable: $DB
+                      regex: (?i)(^|.*[._])(session|db|database|conn|connection|cursor|pool|knex)$
+                  - pattern-not-inside:
+                      patterns:
+                        - pattern: |
+                            class $REPO { ... }
+                        - metavariable-regex:
+                            metavariable: $REPO
+                            regex: (?i).*repository$
         examples:
           good:
             - language: typescript
@@ -120,6 +193,13 @@ pattern:
                     return this.db.query('SELECT * FROM orders WHERE id = $1', [id]);
                   }
                 }
+            - language: typescript
+              code: |
+                class SearchService {
+                  search(term: string) {
+                    return this.index.query(term);
+                  }
+                }
           bad:
             - language: typescript
               code: |
@@ -127,4 +207,10 @@ pattern:
                   async getOrder(id: string): Promise<Order> {
                     return this.db.query('SELECT * FROM orders WHERE id = $1', [id]);
                   }
+                }
+            - language: typescript
+              code: |
+                export async function listOrders(pool: Pool) {
+                  const { rows } = await pool.query('SELECT * FROM orders');
+                  return rows;
                 }

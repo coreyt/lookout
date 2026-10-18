@@ -47,4 +47,9 @@ pattern:
                     data = match_rules(data)
                     data = render_markdown(data)
                     return data
-          bad: []
+          bad:
+            - language: python
+              code: |
+                def build_guidelines(config_path: Path) -> str:
+                    data = parse_configs(config_path)
+                    return render_markdown(data)
