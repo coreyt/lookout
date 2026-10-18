@@ -18,11 +18,14 @@ This will:
 
 ## Built-In Rules
 
-Lookout ships with 7 curated architectural rules that work out-of-box:
+Lookout ships with 10 curated architectural patterns that work out-of-box:
 
-**Enforcement Rules (ARCH):**
+**Enforcement Rules:**
 - `ARCH-001`: HTTP calls require resilience wrappers
-- `ARCH-003`: Use logging instead of print statements
+- `ARCH-003`: Use logging instead of print statements (skips `tests/`, `scripts/`, `examples/`, `docs/`)
+- `DI-001`: Dependency injection via constructor
+- `LAYER-001`: Layered architecture import boundaries (only scans controller/view/handler/API paths)
+- `REPO-001`: Repository pattern for data access (skips repository/DAO/migration paths)
 
 **Pattern Discovery Rules (PATTERN-DISC):**
 - `PATTERN-DISC-006`: Adapter pattern
@@ -48,6 +51,10 @@ Lookout resolves configuration in the following order (highest priority first):
 | `patterns_dir` | Path | `".lookout-patterns"` | Directory for storing discovered/validated patterns. |
 | `target` | List[Path] | `["."]` | Default paths to analyze if none provided via CLI. |
 | `format` | String | `"text"` | Output format: `"text"`, `"json"`, or `"sarif"`. |
+| `fail_on_rule_error` | Bool | `false` | Exit non-zero when a rule fails to compile or run. |
+| `exclude` | List[String] | `[]` | Path globs excluded from **every** rule (Semgrep `paths.exclude` semantics), e.g. `["tests/**", "vendor/**"]`. |
+| `max_tier` | Int (1–3) | `3` | Only run patterns of this tier or stricter. Tier 1 = non-negotiable, 2 = recommended, 3 = advisory. CLI: `--max-tier`. |
+| `detect_variants` | Bool | `true` | Detect the project's languages and frameworks and run only matching variants. CLI: `--all-variants` disables it. |
 
 ## Examples
 
@@ -77,6 +84,69 @@ You can omit `rules_dir` entirely to use only built-in rules:
 target = ["src"]
 format = "text"
 ```
+
+## Which Rules Run
+
+Before scanning, `lookout check` decides which specs and variants apply:
+
+1. **Status**: patterns with `status: deprecated` never run.
+2. **Tier**: patterns with `tier` above `max_tier` are skipped.
+3. **Project profile**: Lookout inspects the targets (and the directories up to the
+   current one) for manifests — `pyproject.toml`, `requirements.txt`, `package.json`,
+   `tsconfig.json`, `go.mod`, … — and for source files, to determine the languages in
+   use and the dependencies declared. A language variant runs only if that language was
+   detected; a framework variant (`django`, `sqlalchemy`, `angular`, …) runs only if that
+   framework is a declared dependency. If nothing can be detected, every variant runs.
+
+In text mode the detected profile and any skipped variants are printed to stderr:
+
+```
+Project profile: languages=python; frameworks=sqlalchemy
+Variants not applicable: DI-001/python/django, DI-001/typescript, LAYER-001/typescript
+```
+
+Use `--all-variants` (or `detect_variants = false`) to run everything regardless.
+
+## Path Scoping in Specs
+
+Any spec can restrict where its checks apply with a `paths` block. Globs use Semgrep's
+`paths:` semantics and are matched against paths relative to the scan root.
+
+```yaml
+pattern:
+  id: "LAYER-001"
+  # ...
+  paths:
+    include:
+      - "**/controllers/**"
+      - "**/api/**"
+    exclude:
+      - "tests/**"
+  variants:
+    - language: python
+      generic:
+        paths:                 # optional: narrows the pattern-level scope for this variant
+          exclude:
+            - "**/legacy/**"
+        check: ...
+```
+
+- Pattern-level `paths` apply to every variant (including `raw` checks).
+- A variant-level `paths` block **replaces** `include` and **adds to** `exclude`.
+- The global `exclude` config option is appended to every rule.
+- v1 (`schema_version: 1`) rules accept the same block under `rule.paths`.
+
+## Baseline
+
+`lookout check --update-baseline` records the current findings in `.lookout-baseline.json`;
+later runs exit 0 unless a finding not in the baseline appears. Findings are fingerprinted by
+pattern, file, normalized code snippet and occurrence order — **not** by line number — so
+editing unrelated code above a known finding does not make it "new" again. Baselined findings
+are still listed (marked `(baselined)` in text output, `"baselined": true` in JSON, and
+`baselineState: unchanged` in SARIF).
+
+Baselines written by versions before the content-based format (`"version": 1`) no longer match;
+re-create them with `--update-baseline`.
 
 ## Rule Loading
 

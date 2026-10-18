@@ -67,7 +67,7 @@ class TestLLMConfigFromTOML:
     def test_load_llm_settings_from_pyproject_toml(self, tmp_path: Path) -> None:
         toml_file = tmp_path / "pyproject.toml"
         toml_file.write_text(
-            '[tool.lookout]\n'
+            "[tool.lookout]\n"
             'llm_provider = "gemini"\n'
             'llm_model = "gemini-2.0-flash-exp"\n'
             "llm_temperature = 0.5\n"
@@ -80,8 +80,7 @@ class TestLLMConfigFromTOML:
     def test_unknown_llm_fields_ignored(self, tmp_path: Path) -> None:
         toml_file = tmp_path / "lookout.toml"
         toml_file.write_text(
-            'llm_provider = "anthropic"\n'
-            'llm_unknown_field = "should be ignored"\n'
+            'llm_provider = "anthropic"\nllm_unknown_field = "should be ignored"\n'
         )
         config = LookoutConfig._load_from_toml(toml_file, section=None)
         assert config.llm_provider == "anthropic"
@@ -101,3 +100,21 @@ class TestLLMConfigFromTOML:
         assert config.llm_provider == "openai"
         assert config.llm_model == "gpt-4o-mini"
         assert config.llm_max_tokens == 2048
+
+
+class TestSelectionSettings:
+    def test_defaults(self) -> None:
+        config = LookoutConfig()
+        assert config.exclude == []
+        assert config.max_tier == 3
+        assert config.detect_variants is True
+
+    def test_load_from_lookout_toml(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "lookout.toml").write_text(
+            'exclude = ["tests/**", "scripts/**"]\nmax_tier = 2\ndetect_variants = false\n'
+        )
+        config = LookoutConfig.load()
+        assert config.exclude == ["tests/**", "scripts/**"]
+        assert config.max_tier == 2
+        assert config.detect_variants is False

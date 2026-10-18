@@ -28,6 +28,25 @@ pattern:
   references:
     - "https://martinfowler.com/bliki/PresentationDomainDataLayering.html"
 
+  status: "active"
+  paths:
+    include:
+      - "**/controllers/**"
+      - "**/controller/**"
+      - "**/views/**"
+      - "**/handlers/**"
+      - "**/api/**"
+      - "**/routes/**"
+      - "**/routers/**"
+      - "**/endpoints/**"
+      - "**/presentation/**"
+    exclude:
+      - "tests/**"
+      - "test/**"
+      - "**/test_*.py"
+      - "**/*_test.py"
+      - "**/conftest.py"
+
   variants:
     - language: python
       version_constraint: ">=3.10"

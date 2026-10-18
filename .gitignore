@@ -48,3 +48,6 @@ htmlcov/
 
 .wake/*
 !.wake/shared/
+
+# Local secrets
+.env

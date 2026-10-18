@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from lookout.baseline import BASELINE_PATH, Baseline, filter_findings, load_baseline, write_baseline
+from lookout.baseline import BASELINE_PATH, Baseline, load_baseline, mark_baselined, write_baseline
 from lookout.models import Finding, PatternInstance, RuleError
 from lookout.semgrep import (
     build_semgrep_command,
@@ -32,12 +32,32 @@ def check_semgrep_version() -> str | None:
     return result.stdout.strip()
 
 
+def targets_outside_git(targets: list[Path]) -> bool:
+    """True if any target is not inside a git work tree (or git is unavailable)."""
+    for target in targets:
+        directory = target if target.is_dir() else target.parent
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(directory), "rev-parse", "--is-inside-work-tree"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return True
+        if result.returncode != 0 or result.stdout.strip() != "true":
+            return True
+    return False
+
+
 def run_lookout(
     specs: list[SpecUnion],
     targets: list[Path],
     dry_run: bool = False,
     update_baseline: bool = False,
     discovery_only: bool = False,
+    enforcement_only: bool = False,
+    global_exclude: list[str] | None = None,
 ) -> tuple[list[Finding], list[Finding], list[PatternInstance], list[RuleError], str | None]:
     """Run Lookout checks (enforcement and/or discovery).
 
@@ -47,14 +67,19 @@ def run_lookout(
         dry_run: If True, show compiled rules without running
         update_baseline: If True, update baseline with current findings
         discovery_only: If True, only run pattern discovery rules
+        enforcement_only: If True, skip pattern discovery rules
+        global_exclude: Path globs excluded from every compiled rule
 
     Returns:
-        Tuple of (all_findings, new_findings, pattern_instances, errors, dry_run_output)
+        Tuple of (all_findings, new_findings, pattern_instances, errors, dry_run_output).
+        ``all_findings`` carry ``baselined=True`` where the baseline already knows them.
     """
     if discovery_only:
         specs = [s for s in specs if is_discovery_spec(s)]
+    elif enforcement_only:
+        specs = [s for s in specs if not is_discovery_spec(s)]
 
-    config = compile_semgrep_config(specs)
+    config = compile_semgrep_config(specs, global_exclude=global_exclude)
     with tempfile.TemporaryDirectory(prefix="lookout-") as temp_dir:
         config_path = Path(temp_dir) / "semgrep.yaml"
         if dry_run:
@@ -62,7 +87,9 @@ def run_lookout(
             return [], [], [], [], dry_output
 
         config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-        command = build_semgrep_command(config_path, targets)
+        command = build_semgrep_command(
+            config_path, targets, no_git_ignore=targets_outside_git(targets)
+        )
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         if result.returncode not in (0, 1, 2):
             raise RuntimeError(
@@ -72,7 +99,8 @@ def run_lookout(
         spec_idx = build_spec_index(specs)
         findings, pattern_instances, errors = parse_semgrep_output(result.stdout, spec_idx)
         baseline = load_baseline(BASELINE_PATH)
-        new_findings = filter_findings(findings, baseline)
+        findings = mark_baselined(findings, baseline)
+        new_findings = [f for f in findings if not f.baselined]
 
         if update_baseline:
             write_baseline(Baseline.from_findings(findings), BASELINE_PATH)
@@ -86,7 +114,14 @@ def format_findings_text(findings: list[Finding]) -> str:
         return "No violations found."
     lines = []
     for finding in findings:
-        lines.append(f"{finding.file}:{finding.line} [{finding.pattern_id}] {finding.message}")
+        suffix = "  (baselined)" if finding.baselined else ""
+        lines.append(
+            f"{finding.file}:{finding.line} [{finding.pattern_id}] {finding.message}{suffix}"
+        )
+    baselined = sum(1 for f in findings if f.baselined)
+    if baselined:
+        lines.append("")
+        lines.append(f"{baselined} of {len(findings)} finding(s) are in the baseline")
     return "\n".join(lines)
 
 

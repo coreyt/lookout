@@ -29,6 +29,15 @@ pattern:
     - "https://martinfowler.com/articles/injection.html"
     - "https://en.wikipedia.org/wiki/Dependency_injection"
 
+  status: "active"
+  paths:
+    exclude:
+      - "tests/**"
+      - "test/**"
+      - "**/test_*.py"
+      - "**/*_test.py"
+      - "**/conftest.py"
+
   variants:
     - language: python
       version_constraint: ">=3.10"

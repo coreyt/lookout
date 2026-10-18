@@ -33,6 +33,14 @@ class LookoutConfig(BaseModel):
     format: str = Field(default="text")
     fail_on_rule_error: bool = Field(default=False)
 
+    # Rule selection
+    #: Path globs excluded from every rule (Semgrep ``paths.exclude`` semantics).
+    exclude: list[str] = Field(default_factory=list)
+    #: Only run patterns whose tier is <= this (1 = non-negotiable, 3 = advisory).
+    max_tier: int = Field(default=3, ge=1, le=3)
+    #: Detect project languages/frameworks and run only matching variants.
+    detect_variants: bool = Field(default=True)
+
     # Discovery settings
     patterns_dir: Path = Field(default=Path(".lookout-patterns"))
 

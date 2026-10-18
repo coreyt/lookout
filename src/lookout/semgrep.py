@@ -12,6 +12,7 @@ from lookout.models import (
     Finding,
     ForbiddenCheck,
     MustWrapCheck,
+    PathScope,
     PatternDiscoveryCheck,
     PatternInstance,
     PatternSpecFile,
@@ -34,28 +35,56 @@ yaml.add_representer(str, _str_presenter)  # type: ignore[arg-type]
 yaml.add_representer(str, _str_presenter, Dumper=yaml.SafeDumper)  # type: ignore[arg-type]
 
 
-def compile_semgrep_config(specs: list[SpecUnion]) -> dict[str, Any]:
+def compile_semgrep_config(
+    specs: list[SpecUnion], global_exclude: list[str] | None = None
+) -> dict[str, Any]:
+    """Compile specs into a Semgrep config dict.
+
+    Args:
+        specs: Rule/pattern specs to compile
+        global_exclude: Path globs excluded from every rule (e.g. ``tests/**``)
+    """
     rules: list[dict[str, Any]] = []
     for spec in specs:
         if isinstance(spec, PatternSpecFile):
             rules.extend(_flatten_pattern_spec(spec))
         else:
             _compile_v1_spec(spec, rules)
+    if global_exclude:
+        for rule in rules:
+            _apply_paths(rule, PathScope(exclude=list(global_exclude)))
     return {"rules": rules}
 
 
-def _expand_raw_check(check: RawCheck) -> list[dict[str, Any]]:
-    """Parse a RawCheck config and return its rules list."""
+def _apply_paths(rule: dict[str, Any], scope: PathScope | None) -> dict[str, Any]:
+    """Merge a PathScope into a Semgrep rule's ``paths:`` block.
+
+    Includes already present on the rule (e.g. from a raw check) take precedence;
+    excludes accumulate.
+    """
+    if scope is None or (not scope.include and not scope.exclude):
+        return rule
+    paths: dict[str, list[str]] = rule.setdefault("paths", {})
+    if scope.include and not paths.get("include"):
+        paths["include"] = list(scope.include)
+    if scope.exclude:
+        existing = paths.get("exclude", [])
+        paths["exclude"] = existing + [g for g in scope.exclude if g not in existing]
+    return rule
+
+
+def _expand_raw_check(check: RawCheck, scope: PathScope | None = None) -> list[dict[str, Any]]:
+    """Parse a RawCheck config and return its rules list, applying ``scope`` to each."""
     raw_config = yaml.safe_load(check.config)
     result: list[dict[str, Any]] = raw_config.get("rules", [])
-    return result
+    return [_apply_paths(rule, scope) for rule in result]
 
 
 def _compile_v1_spec(spec: RuleSpecFile, rules: list[dict[str, Any]]) -> None:
     rule = spec.rule
     check = rule.check
     if isinstance(check, RawCheck):
-        rules.extend(_expand_raw_check(check))
+        rules.extend(_expand_raw_check(check, rule.paths))
         return
 
     compiled: dict[str, Any] = {
@@ -66,20 +95,35 @@ def _compile_v1_spec(spec: RuleSpecFile, rules: list[dict[str, Any]]) -> None:
     }
 
     compiled["patterns"] = _compile_patterns(check)
-    rules.append(compiled)
+    rules.append(_apply_paths(compiled, rule.paths))
 
 
 def _compile_variant(
-    rule_id: str, language: str, severity: str, message: str, check: RuleCheck
+    rule_id: str,
+    language: str,
+    severity: str,
+    message: str,
+    check: RuleCheck,
+    scope: PathScope | None = None,
 ) -> dict[str, Any]:
     """Compile a single variant check into a Semgrep rule dict."""
-    return {
+    compiled = {
         "id": rule_id,
         "languages": [language],
         "severity": severity.upper(),
         "message": message,
         "patterns": _compile_patterns(check),
     }
+    return _apply_paths(compiled, scope)
+
+
+def _variant_scope(
+    spec_scope: PathScope | None, variant_scope: PathScope | None
+) -> PathScope | None:
+    """Resolve the effective scope for a variant: variant overrides pattern-level."""
+    if spec_scope is None:
+        return variant_scope
+    return spec_scope.merged_with(variant_scope)
 
 
 def _flatten_pattern_spec(spec: PatternSpecFile) -> list[dict[str, Any]]:
@@ -95,19 +139,21 @@ def _flatten_pattern_spec(spec: PatternSpecFile) -> list[dict[str, Any]]:
 
         if variant.generic is not None:
             check = variant.generic.check
+            scope = _variant_scope(pattern.paths, variant.generic.paths)
             if isinstance(check, RawCheck):
-                rules.extend(_expand_raw_check(check))
+                rules.extend(_expand_raw_check(check, scope))
             else:
                 rule_id = f"{pattern_id}-{language}-impl"
-                rules.append(_compile_variant(rule_id, language, severity, message, check))
+                rules.append(_compile_variant(rule_id, language, severity, message, check, scope))
 
         for fw in variant.frameworks:
             check = fw.check
+            scope = _variant_scope(pattern.paths, fw.paths)
             if isinstance(check, RawCheck):
-                rules.extend(_expand_raw_check(check))
+                rules.extend(_expand_raw_check(check, scope))
             else:
                 rule_id = f"{pattern_id}-{language}-{fw.name}-impl"
-                rules.append(_compile_variant(rule_id, language, severity, message, check))
+                rules.append(_compile_variant(rule_id, language, severity, message, check, scope))
 
     return rules
 
@@ -202,15 +248,26 @@ def _decorator_pair(first: str, second: str) -> str:
     ).strip()
 
 
-def build_semgrep_command(config_path: Path, targets: list[Path]) -> list[str]:
-    return [
+def build_semgrep_command(
+    config_path: Path, targets: list[Path], no_git_ignore: bool = False
+) -> list[str]:
+    """Build the Semgrep CLI invocation.
+
+    ``no_git_ignore`` must be set when a target is not inside a git work tree:
+    recent Semgrep versions enumerate targets with ``git ls-files`` and otherwise
+    silently scan nothing.
+    """
+    command = [
         "semgrep",
         "--config",
         str(config_path),
         "--json",
         "--metrics=off",
-        *[str(target) for target in targets],
     ]
+    if no_git_ignore:
+        command.append("--no-git-ignore")
+    command.extend(str(target) for target in targets)
+    return command
 
 
 def render_dry_run(config: dict[str, Any], config_path: Path, targets: list[Path]) -> str:

@@ -29,6 +29,24 @@ pattern:
     - "https://martinfowler.com/eaaCatalog/repository.html"
     - "https://www.cosmicpython.com/book/chapter_02_repository.html"
 
+  status: "active"
+  paths:
+    exclude:
+      - "**/repositories/**"
+      - "**/repository/**"
+      - "**/*_repository.py"
+      - "**/*repository.py"
+      - "**/*.repository.ts"
+      - "**/dao/**"
+      - "**/data/**"
+      - "**/migrations/**"
+      - "**/alembic/**"
+      - "tests/**"
+      - "test/**"
+      - "**/test_*.py"
+      - "**/*_test.py"
+      - "**/conftest.py"
+
   variants:
     - language: python
       version_constraint: ">=3.10"

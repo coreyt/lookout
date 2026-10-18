@@ -37,6 +37,7 @@ def format_findings_sarif(findings: list[Finding], version: str = "0.1.0") -> st
             {
                 "ruleId": finding.pattern_id,
                 "level": _map_severity_to_sarif(finding.severity),
+                "baselineState": "unchanged" if finding.baselined else "new",
                 "message": {"text": finding.message},
                 "locations": [
                     {

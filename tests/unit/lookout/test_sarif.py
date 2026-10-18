@@ -179,3 +179,15 @@ class TestFormatFindingsSarif:
         sarif = json.loads(format_findings_sarif([f]))
         rule = sarif["runs"][0]["tool"]["driver"]["rules"][0]
         assert rule["properties"]["category"] == "security"
+
+
+class TestBaselineState:
+    def test_new_finding_is_marked_new(self) -> None:
+        sarif = json.loads(format_findings_sarif([_finding()]))
+        assert sarif["runs"][0]["results"][0]["baselineState"] == "new"
+
+    def test_baselined_finding_is_marked_unchanged(self) -> None:
+        from dataclasses import replace
+
+        sarif = json.loads(format_findings_sarif([replace(_finding(), baselined=True)]))
+        assert sarif["runs"][0]["results"][0]["baselineState"] == "unchanged"

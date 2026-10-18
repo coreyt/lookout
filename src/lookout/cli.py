@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from lookout.rule_generator import GeneratedCheck
 
 from lookout.config import LookoutConfig
+from lookout.project import detect_profile, select_specs
 from lookout.rules_loader import load_all_rules
 from lookout.runner import (
     format_findings_json,
@@ -49,6 +50,8 @@ def cli(ctx: click.Context) -> None:
             "target": config.target,
             "format": config.format,
             "fail_on_rule_error": config.fail_on_rule_error,
+            "max_tier": config.max_tier,
+            "all_variants": not config.detect_variants,
         },
         "discover": {
             "rules_dir": config.rules_dir,
@@ -100,6 +103,16 @@ def cli(ctx: click.Context) -> None:
     is_flag=True,
     help="Exit with error if any rules fail to execute",
 )
+@click.option(
+    "--max-tier",
+    type=click.IntRange(1, 3),
+    help="Only run patterns of this tier or stricter (1 = non-negotiable, 3 = advisory)",
+)
+@click.option(
+    "--all-variants",
+    is_flag=True,
+    help="Skip project detection and run every language/framework variant",
+)
 def check(
     rules_dir: Path | None,
     update_baseline: bool,
@@ -107,6 +120,8 @@ def check(
     dry_run: bool,
     target: tuple[Path, ...],
     fail_on_rule_error: bool,
+    max_tier: int | None,
+    all_variants: bool,
 ) -> None:
     """Run structural governance checks on your codebase."""
     # Note: Click injects defaults from default_map, so values shouldn't be None
@@ -130,13 +145,28 @@ def check(
         click.echo("No rule specifications found (neither built-in nor user rules)", err=True)
         sys.exit(1)
 
+    # Keep only the specs/variants that apply to this project
+    profile = None if all_variants else detect_profile(final_target)
+    selection = select_specs(specs, profile, max_tier=max_tier or config.max_tier)
+    verbose = final_format == "text" or dry_run
+    if verbose:
+        if profile is not None:
+            click.echo(profile.describe(), err=True)
+        for line in selection.summary_lines():
+            click.echo(line, err=True)
+
+    if not selection.selected:
+        click.echo("No rule specifications apply to this project", err=True)
+        sys.exit(0)
+
     # Run the enforcement engine
     findings, new_findings, _, errors, dry_output = run_lookout(
-        specs=specs,
+        specs=selection.selected,
         targets=final_target,
         dry_run=dry_run,
         update_baseline=update_baseline,
-        discovery_only=False,
+        enforcement_only=True,
+        global_exclude=config.exclude,
     )
 
     # Report rule execution errors
@@ -717,8 +747,7 @@ def batch_submit(
         cells = [
             c
             for c in cells
-            if c.status
-            in (CellStatus.MISSING, CellStatus.POSSIBLY_STALE, CellStatus.LIKELY_STALE)
+            if c.status in (CellStatus.MISSING, CellStatus.POSSIBLY_STALE, CellStatus.LIKELY_STALE)
         ]
     elif all_missing:
         cells = [c for c in cells if c.status == CellStatus.MISSING]
@@ -729,9 +758,7 @@ def batch_submit(
 
     missing = sum(1 for c in cells if c.status == CellStatus.MISSING)
     stale = sum(
-        1
-        for c in cells
-        if c.status in (CellStatus.POSSIBLY_STALE, CellStatus.LIKELY_STALE)
+        1 for c in cells if c.status in (CellStatus.POSSIBLY_STALE, CellStatus.LIKELY_STALE)
     )
 
     click.echo(f"{len(cells)} cell(s) selected ({missing} missing, {stale} stale)")

@@ -23,6 +23,17 @@ pattern:
     - "https://click.palletsprojects.com/en/8.1.x/api/#click.echo"
   status: "active"
 
+  paths:
+    exclude:
+      - "tests/**"
+      - "test/**"
+      - "**/test_*.py"
+      - "**/*_test.py"
+      - "**/conftest.py"
+      - "scripts/**"
+      - "examples/**"
+      - "docs/**"
+
   variants:
     - language: python
       generic:

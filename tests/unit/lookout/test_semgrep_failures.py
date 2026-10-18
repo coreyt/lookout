@@ -63,7 +63,7 @@ def test_run_lookout_reports_parse_errors(monkeypatch) -> None:
 
     # Mock other dependencies
     monkeypatch.setattr("lookout.runner.load_baseline", lambda *args, **kwargs: None)
-    monkeypatch.setattr("lookout.runner.filter_findings", lambda f, b: f)
+    monkeypatch.setattr("lookout.runner.targets_outside_git", lambda targets: False)
 
     # Expecting run_lookout to return: (findings, new_findings, instances, errors, dry_output)
     findings, new_findings, instances, errors, dry_output = run_lookout(

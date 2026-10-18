@@ -46,6 +46,27 @@ class PatternDiscoveryCheck(BaseModel):
     metavariable_regex: list[MetavariableRegex] | None = None
 
 
+class PathScope(BaseModel):
+    """Restrict a check to files matching include globs and not matching exclude globs.
+
+    Globs follow Semgrep's ``paths:`` semantics (matched against the path
+    relative to the scan root, e.g. ``controllers/**`` or ``*_test.py``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    include: list[str] = Field(default_factory=list)
+    exclude: list[str] = Field(default_factory=list)
+
+    def merged_with(self, override: PathScope | None) -> PathScope:
+        """Combine with a narrower scope: includes are replaced, excludes accumulate."""
+        if override is None:
+            return self
+        return PathScope(
+            include=override.include or self.include,
+            exclude=[*self.exclude, *override.exclude],
+        )
+
+
 RuleCheck = Annotated[
     MustWrapCheck | ForbiddenCheck | RequiredWithCheck | RawCheck | PatternDiscoveryCheck,
     Field(discriminator="type"),
@@ -86,6 +107,7 @@ class RuleSpec(BaseModel):
     severity: Literal["error", "warning", "info"]
     languages: list[str]
     check: RuleCheck
+    paths: PathScope | None = None
     reporting: RuleReporting
     examples: RuleExamples
     references: list[str]
@@ -123,6 +145,7 @@ class GenericVariant(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     check: RuleCheck
+    paths: PathScope | None = None
     examples: VariantExamples
     generation_meta: GenerationMeta | None = None
 
@@ -133,6 +156,7 @@ class FrameworkVariant(BaseModel):
     name: str
     version_constraint: str | None = None
     check: RuleCheck
+    paths: PathScope | None = None
     examples: VariantExamples
     generation_meta: GenerationMeta | None = None
 
@@ -162,6 +186,7 @@ class PatternSpec(BaseModel):
     reporting: RuleReporting
     references: list[str] = Field(default_factory=list)
     status: Literal["draft", "active", "deprecated"] = "draft"
+    paths: PathScope | None = None
     variants: list[LanguageVariant] = Field(default_factory=list)
 
 
@@ -186,6 +211,7 @@ class Finding:
     snippet: str
     engine: str
     tier: int
+    baselined: bool = False
 
 
 @dataclass(frozen=True)

@@ -7,6 +7,11 @@ from click.testing import CliRunner
 
 from lookout.cli import cli
 from lookout.models import RuleError
+from lookout.project import SelectionReport
+
+
+def _passthrough_selection(specs, profile, max_tier):
+    return SelectionReport(specs, [], [], [], [])
 
 
 def test_check_continues_on_rule_error_by_default(monkeypatch):
@@ -17,6 +22,7 @@ def test_check_continues_on_rule_error_by_default(monkeypatch):
 
     # Mock load_rule_specs to return something so we don't fail early
     monkeypatch.setattr("lookout.cli.load_all_rules", lambda user_rules_dir: [Mock()])
+    monkeypatch.setattr("lookout.cli.select_specs", _passthrough_selection)
 
     runner = CliRunner(mix_stderr=False)
     with runner.isolated_filesystem():
@@ -32,6 +38,7 @@ def test_check_fails_on_rule_error_with_flag(monkeypatch):
     errors = [RuleError(rule_id="TEST", message="Fail", level="error", type="Parse")]
     monkeypatch.setattr("lookout.cli.run_lookout", lambda **kwargs: ([], [], [], errors, None))
     monkeypatch.setattr("lookout.cli.load_all_rules", lambda user_rules_dir: [Mock()])
+    monkeypatch.setattr("lookout.cli.select_specs", _passthrough_selection)
 
     runner = CliRunner(mix_stderr=False)
     with runner.isolated_filesystem():
