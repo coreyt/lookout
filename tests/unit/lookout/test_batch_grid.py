@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from lookout.batch.grid import build_registry_grid, compute_input_hash
-from lookout.batch.models import CellStatus, RegistryCell
+from lookout.batch.models import CellStatus
 from lookout.models import (
     ForbiddenCheck,
-    GenericVariant,
     GenerationMeta,
+    GenericVariant,
     LanguageVariant,
     PatternSpec,
     PatternSpecFile,
@@ -198,7 +198,7 @@ class TestBuildRegistryGrid:
         assert fw_names == {"django", "flask"}
 
     def test_framework_present_when_exists(self) -> None:
-        from lookout.models import FrameworkVariant as FW
+        from lookout.models import FrameworkVariant
 
         check = _make_check()
         # The upstream_check for framework hash is the generic check's JSON
@@ -215,7 +215,7 @@ class TestBuildRegistryGrid:
                     language="python",
                     generic=GenericVariant(check=check, examples=VariantExamples()),
                     frameworks=[
-                        FW(
+                        FrameworkVariant(
                             name="django",
                             check=check,
                             examples=VariantExamples(),
@@ -233,7 +233,7 @@ class TestBuildRegistryGrid:
         assert flask_cell.status == CellStatus.MISSING
 
     def test_likely_stale_framework_when_generic_newer(self) -> None:
-        from lookout.models import FrameworkVariant as FW
+        from lookout.models import FrameworkVariant
 
         check = _make_check()
         generic_meta = GenerationMeta(
@@ -258,7 +258,7 @@ class TestBuildRegistryGrid:
                         generation_meta=generic_meta,
                     ),
                     frameworks=[
-                        FW(
+                        FrameworkVariant(
                             name="django",
                             check=check,
                             examples=VariantExamples(),

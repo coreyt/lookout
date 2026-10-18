@@ -1349,7 +1349,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
-    { name = "litellm", specifier = ">=1.40.0" },
+    { name = "litellm", specifier = ">=1.40.0,!=1.82.7,!=1.82.8" },
     { name = "lookout", editable = "." },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "pydantic", specifier = ">=2.0" },

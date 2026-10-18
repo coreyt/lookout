@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --extra dev
       - name: Ruff format check
         run: uv run ruff format --check src/ tests/
       - name: Ruff lint
@@ -32,11 +32,15 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
+    env:
+      # Pin every uv command to the matrix interpreter; otherwise `uv run` follows
+      # .python-version and recreates .venv without the dev extra.
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
-        run: uv sync --python ${{ matrix.python-version }} --dev
+        run: uv sync --extra dev
       - name: Run tests with coverage
         run: uv run pytest --cov --cov-report=term-missing --cov-report=xml
       - name: Upload coverage

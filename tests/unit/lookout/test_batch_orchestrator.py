@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from lookout.batch.models import (
     BatchJob,
     BatchRequest,
-    BatchResult,
     BatchStatus,
     CellStatus,
     RegistryCell,
@@ -19,13 +17,9 @@ from lookout.batch.models import (
 from lookout.batch.orchestrator import BatchOrchestrator
 from lookout.config import LookoutConfig
 from lookout.models import (
-    ForbiddenCheck,
-    GenericVariant,
-    LanguageVariant,
     PatternSpec,
     PatternSpecFile,
     RuleReporting,
-    VariantExamples,
 )
 
 

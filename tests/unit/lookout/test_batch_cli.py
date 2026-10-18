@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from click.testing import CliRunner
 
-from lookout.batch.models import BatchJob, BatchStatus, CellStatus, RegistryCell
+from lookout.batch.models import BatchJob, BatchStatus
 from lookout.cli import cli
 from lookout.models import (
     PatternSpec,
@@ -49,11 +47,14 @@ class TestBatchSubmit:
             result = runner.invoke(
                 cli,
                 [
-                    "batch", "submit",
-                    "--languages", "python",
+                    "batch",
+                    "submit",
+                    "--languages",
+                    "python",
                     "--all-missing",
                     "--dry-run",
-                    "--rules-dir", str(rules_dir),
+                    "--rules-dir",
+                    str(rules_dir),
                 ],
                 catch_exceptions=False,
             )
@@ -70,10 +71,13 @@ class TestBatchSubmit:
             result = runner.invoke(
                 cli,
                 [
-                    "batch", "submit",
-                    "--languages", "python",
+                    "batch",
+                    "submit",
+                    "--languages",
+                    "python",
                     "--all-missing",
-                    "--rules-dir", str(rules_dir),
+                    "--rules-dir",
+                    str(rules_dir),
                 ],
             )
             assert result.exit_code == 0
@@ -90,8 +94,10 @@ class TestBatchList:
             result = runner.invoke(
                 cli,
                 [
-                    "batch", "list",
-                    "--jobs-dir", str(jobs_dir),
+                    "batch",
+                    "list",
+                    "--jobs-dir",
+                    str(jobs_dir),
                 ],
             )
             assert result.exit_code == 0
@@ -116,8 +122,10 @@ class TestBatchList:
             result = runner.invoke(
                 cli,
                 [
-                    "batch", "list",
-                    "--jobs-dir", str(jobs_dir),
+                    "batch",
+                    "list",
+                    "--jobs-dir",
+                    str(jobs_dir),
                 ],
             )
             assert result.exit_code == 0
@@ -145,8 +153,11 @@ class TestBatchStatus:
             result = runner.invoke(
                 cli,
                 [
-                    "batch", "status", "batch_123",
-                    "--jobs-dir", str(jobs_dir),
+                    "batch",
+                    "status",
+                    "batch_123",
+                    "--jobs-dir",
+                    str(jobs_dir),
                 ],
             )
             assert result.exit_code == 0
@@ -162,8 +173,11 @@ class TestBatchStatus:
             result = runner.invoke(
                 cli,
                 [
-                    "batch", "status", "nonexistent",
-                    "--jobs-dir", str(jobs_dir),
+                    "batch",
+                    "status",
+                    "nonexistent",
+                    "--jobs-dir",
+                    str(jobs_dir),
                 ],
             )
             assert result.exit_code == 1

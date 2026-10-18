@@ -160,10 +160,6 @@ class BatchJob:
             requests=requests,
             results=results,
             created_at=_parse_iso(data["created_at"]),
-            completed_at=(
-                _parse_iso(data["completed_at"])
-                if data["completed_at"]
-                else None
-            ),
+            completed_at=(_parse_iso(data["completed_at"]) if data["completed_at"] else None),
             request_counts=data["request_counts"],
         )
