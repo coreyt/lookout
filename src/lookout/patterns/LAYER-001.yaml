@@ -64,9 +64,12 @@ pattern:
                   go through the service layer instead (LAYER-001)
                 pattern-either:
                   - pattern: from $PKG.repositories import $NAME
+                  - pattern: from $PKG.repositories.$MOD import $NAME
                   - pattern: import $PKG.repositories
                   - pattern: from $PKG.data import $NAME
+                  - pattern: from $PKG.data.$MOD import $NAME
                   - pattern: from $PKG.dao import $NAME
+                  - pattern: from $PKG.dao.$MOD import $NAME
         examples:
           good:
             - language: python
@@ -77,6 +80,10 @@ pattern:
                 class OrderController:
                     def __init__(self, service: OrderService):
                         self._service = service
+            - language: python
+              code: |
+                from myapp.services.orders import OrderService
+                from myapp.schemas import OrderSchema
           bad:
             - language: python
               code: |
@@ -86,6 +93,15 @@ pattern:
                 class OrderController:
                     def __init__(self):
                         self._repo = OrderRepository()
+            - language: python
+              code: |
+                from myapp.repositories.orders import OrderRepository
+            - language: python
+              code: |
+                import myapp.repositories
+            - language: python
+              code: |
+                from myapp.dao import OrderDao
 
     - language: typescript
       version_constraint: ">=4.0"
@@ -101,10 +117,14 @@ pattern:
                 message: >-
                   Controller imports directly from data/repository layer —
                   go through the service layer instead (LAYER-001)
-                pattern-either:
-                  - pattern: import { $NAME } from '$PKG/repositories/$MOD'
-                  - pattern: import { $NAME } from '$PKG/data/$MOD'
-                  - pattern: import { $NAME } from '$PKG/dao/$MOD'
+                patterns:
+                  - pattern-either:
+                      - pattern: import { ... } from '$PATH'
+                      - pattern: import $DEFAULT from '$PATH'
+                      - pattern: import * as $NS from '$PATH'
+                  - metavariable-regex:
+                      metavariable: $PATH
+                      regex: .*/(repositories|data|dao)/.*
         examples:
           good:
             - language: typescript
@@ -115,6 +135,10 @@ pattern:
                 export class OrderController {
                   constructor(private readonly orderService: OrderService) {}
                 }
+            - language: typescript
+              code: |
+                import express from 'express';
+                import { OrderDto } from '../dto/order.dto';
           bad:
             - language: typescript
               code: |
@@ -124,3 +148,9 @@ pattern:
                 export class OrderController {
                   constructor(private readonly repo: OrderRepository) {}
                 }
+            - language: typescript
+              code: |
+                import orders from '@app/data/orders';
+            - language: typescript
+              code: |
+                import * as dao from './dao/order.dao';

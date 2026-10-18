@@ -48,4 +48,13 @@ pattern:
 
                     def __exit__(self, exc_type, exc_val, exc_tb):
                         self.conn.close()
-          bad: []
+          bad:
+            - language: python
+              code: |
+                class DatabaseConnection:
+                    def __enter__(self):
+                        self.conn = connect_to_db()
+                        return self.conn
+
+                    def close(self):
+                        self.conn.close()

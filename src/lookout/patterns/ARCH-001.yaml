@@ -31,7 +31,18 @@ pattern:
           target:
             - "requests.get"
             - "requests.post"
-            - "httpx.*"
+            - "requests.put"
+            - "requests.patch"
+            - "requests.delete"
+            - "requests.head"
+            - "requests.request"
+            - "httpx.get"
+            - "httpx.post"
+            - "httpx.put"
+            - "httpx.patch"
+            - "httpx.delete"
+            - "httpx.head"
+            - "httpx.request"
           wrapper:
             - "circuit_breaker"
             - "with_retry"
@@ -42,7 +53,26 @@ pattern:
               code: |
                 with circuit_breaker():
                     requests.get(url)
+            - language: python
+              code: |
+                with with_retry(max_attempts=3):
+                    httpx.post(url, json=payload)
+            - language: python
+              code: |
+                @resilient
+                def fetch(url):
+                    return requests.get(url)
+            - language: python
+              code: |
+                client = httpx.Client(timeout=5)
           bad:
             - language: python
               code: |
                 requests.get(url)
+            - language: python
+              code: |
+                httpx.get(url)
+            - language: python
+              code: |
+                def fetch(url):
+                    return requests.post(url, json=payload)
