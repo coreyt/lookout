@@ -19,11 +19,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
       - name: Ruff format check
-        run: uv run ruff format --check src/ tests/
+        run: uv run --extra dev ruff format --check src/ tests/
       - name: Ruff lint
-        run: uv run ruff check src/ tests/
+        run: uv run --extra dev ruff check src/ tests/
       - name: Mypy
-        run: uv run mypy src/lookout/
+        run: uv run --extra dev mypy src/lookout/
 
   test:
     name: Test (Python ${{ matrix.python-version }})
@@ -32,13 +32,17 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
+    env:
+      # Override .python-version so `uv run` keeps the matrix interpreter
+      # instead of recreating the venv (and dropping the dev extra).
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
-        run: uv sync --python ${{ matrix.python-version }} --extra dev
+        run: uv sync --extra dev
       - name: Run tests with coverage
-        run: uv run pytest --cov --cov-report=term-missing --cov-report=xml
+        run: uv run --extra dev pytest --cov --cov-report=term-missing --cov-report=xml
       - name: Upload coverage
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4
