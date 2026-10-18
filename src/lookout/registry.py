@@ -81,9 +81,7 @@ def add_language_variant(
     """Add a language variant with a generic check. Raises if language exists."""
     for v in spec.pattern.variants:
         if v.language == language:
-            raise LookoutError(
-                f"Language '{language}' already exists in pattern {spec.pattern.id}"
-            )
+            raise LookoutError(f"Language '{language}' already exists in pattern {spec.pattern.id}")
 
     new_variant = LanguageVariant(
         language=language,
@@ -138,9 +136,7 @@ def add_framework_variant(
             new_variants.append(v)
 
     if not lang_found:
-        raise LookoutError(
-            f"Language '{language}' not found in pattern {spec.pattern.id}"
-        )
+        raise LookoutError(f"Language '{language}' not found in pattern {spec.pattern.id}")
 
     return _replace_variants(spec, new_variants)
 

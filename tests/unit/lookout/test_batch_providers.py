@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from lookout.batch.models import (
-    BatchResult,
     BatchRequest,
     BatchStatus,
     CellStatus,
