@@ -55,6 +55,7 @@ Lookout resolves configuration in the following order (highest priority first):
 | `exclude` | List[String] | `[]` | Path globs excluded from **every** rule (Semgrep `paths.exclude` semantics), e.g. `["tests/**", "vendor/**"]`. |
 | `max_tier` | Int (1–3) | `3` | Only run patterns of this tier or stricter. Tier 1 = non-negotiable, 2 = recommended, 3 = advisory. CLI: `--max-tier`. |
 | `detect_variants` | Bool | `true` | Detect the project's languages and frameworks and run only matching variants. CLI: `--all-variants` disables it. |
+| `promote_max_attempts` | Int (≥1) | `3` | Generate→verify rounds `lookout promote --generate-check` makes before giving up. CLI: `--max-attempts`. |
 
 ## Examples
 

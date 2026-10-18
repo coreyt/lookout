@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -33,6 +34,12 @@ from lookout.models import (
     RequiredWithCheck,
     RuleCheck,
 )
+from lookout.rule_verifier import VerificationReport, verify_check
+
+#: Default number of generate→verify rounds before giving up.
+DEFAULT_MAX_ATTEMPTS = 3
+
+Verifier = Callable[[RuleCheck, ValidatedPattern], VerificationReport]
 
 
 @dataclass
@@ -46,6 +53,27 @@ class GeneratedCheck:
 
     check: RuleCheck
     scaffolding: str | None = None
+
+
+@dataclass
+class VerifiedGeneration:
+    """Outcome of the generate→verify loop.
+
+    Attributes:
+        generated: The last check the LLM produced, or None if every attempt
+            failed to yield a parseable check.
+        report: Verification report for ``generated`` (None when nothing was
+            generated).
+        attempts: Number of LLM calls made.
+    """
+
+    generated: GeneratedCheck | None
+    report: VerificationReport | None
+    attempts: int
+
+    @property
+    def verified(self) -> bool:
+        return self.generated is not None and self.report is not None and self.report.passed
 
 
 logger = logging.getLogger("lookout.rule_generator")
@@ -113,11 +141,15 @@ class RuleGenerator:
         if self._client:
             await self._client.aclose()
 
-    async def generate_check(self, pattern: ValidatedPattern) -> GeneratedCheck | None:
+    async def generate_check(
+        self, pattern: ValidatedPattern, feedback: str | None = None
+    ) -> GeneratedCheck | None:
         """Generate a RuleCheck from a validated pattern.
 
         Args:
             pattern: The validated pattern with description, rationale, examples
+            feedback: Verification feedback from a previous attempt, appended to
+                the prompt so the model can correct its rule
 
         Returns:
             A GeneratedCheck with the check and optional scaffolding, or None on failure
@@ -125,7 +157,7 @@ class RuleGenerator:
         if not self._client:
             raise RuntimeError("RuleGenerator must be used as async context manager")
 
-        prompt = self._build_prompt(pattern)
+        prompt = self._build_prompt(pattern, feedback=feedback)
 
         try:
             response_data = await self._call_llm_with_retry(prompt)
@@ -142,8 +174,71 @@ class RuleGenerator:
             return None
         return GeneratedCheck(check=check, scaffolding=scaffolding)
 
-    def _build_prompt(self, pattern: ValidatedPattern) -> str:
-        """Build a prompt that asks the LLM to generate a single RuleCheck JSON object."""
+    async def generate_verified_check(
+        self,
+        pattern: ValidatedPattern,
+        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        verifier: Verifier = verify_check,
+    ) -> VerifiedGeneration:
+        """Generate a check and verify it against the pattern's examples with Semgrep.
+
+        Each failed verification is fed back into the next prompt (the rejected
+        check plus the report) until a check passes or ``max_attempts`` LLM
+        calls have been made. The last candidate and its report are returned
+        either way so callers can show the report or force-save the rule.
+
+        Args:
+            pattern: The validated pattern to generate a check for
+            max_attempts: Maximum number of LLM calls (>= 1)
+            verifier: Runs the check against the examples; injectable for tests
+        """
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+
+        feedback: str | None = None
+        last_generated: GeneratedCheck | None = None
+        last_report: VerificationReport | None = None
+        attempts = 0
+
+        for attempt in range(1, max_attempts + 1):
+            attempts = attempt
+            generated = await self.generate_check(pattern, feedback=feedback)
+            if generated is None:
+                logger.warning("Attempt %d/%d produced no valid check", attempt, max_attempts)
+                feedback = (
+                    "Your previous response could not be parsed into a valid check object. "
+                    'Return exactly one JSON object with a supported "type" and the '
+                    "fields that type requires."
+                )
+                continue
+
+            last_generated = generated
+            report = verifier(generated.check, pattern)
+            last_report = report
+            if report.passed:
+                logger.info("Check verified on attempt %d/%d", attempt, max_attempts)
+                return VerifiedGeneration(generated=generated, report=report, attempts=attempt)
+
+            logger.warning(
+                "Attempt %d/%d failed verification:\n%s", attempt, max_attempts, report.format()
+            )
+            feedback = (
+                "The check below was compiled and run with Semgrep against the examples "
+                "above and failed:\n\n"
+                f"{json.dumps(generated.check.model_dump(mode='json'), indent=2)}\n\n"
+                f"{report.format()}\n\n"
+                "Fix the rule so that EVERY bad example produces a match and NO good "
+                "example does. Prefer precise patterns over broad wildcards."
+            )
+
+        return VerifiedGeneration(generated=last_generated, report=last_report, attempts=attempts)
+
+    def _build_prompt(self, pattern: ValidatedPattern, feedback: str | None = None) -> str:
+        """Build a prompt that asks the LLM to generate a single RuleCheck JSON object.
+
+        ``feedback`` (a verification report from a previous attempt) is
+        appended so the model can correct its rule.
+        """
         discovered = pattern.discovered
 
         # Format examples
@@ -156,6 +251,15 @@ class RuleGenerator:
             bad_examples += f"\n```{ex.language}\n{ex.code}\n```\n"
 
         languages = ", ".join(discovered.languages) if discovered.languages else "language-agnostic"
+
+        feedback_section = ""
+        if feedback:
+            feedback_section = f"""
+
+## Previous Attempt Failed Verification
+
+{feedback}
+"""
 
         return f"""You are a Semgrep rule expert. Given a coding pattern description, generate a single JSON check object that can enforce the pattern.
 
@@ -223,7 +327,7 @@ Example output format:
 ```
 {{"scaffolding": {{"requirement": "...", "constraints": "...", "design": "..."}}, "type": "forbidden", "pattern": "..."}}
 ```
-
+{feedback_section}
 Return the JSON object now:"""
 
     def _parse_check(self, text: str) -> tuple[RuleCheck | None, str | None]:

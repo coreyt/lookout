@@ -31,7 +31,7 @@ Lookout combines:
 - **Web Research**: `lookout research` searches trusted sources (Martin Fowler, Refactoring Guru, cloud provider docs) and extracts coding patterns via LLM or keyword extraction
 - **Documentation Analysis**: `lookout research --docs .` reads your project's own `ARCHITECTURE.md`, `DESIGN.md`, and ADR files to extract the architectural patterns your team has already documented
 - **Validation**: `lookout validate` marks discovered patterns as reviewed and assigns enforcement tiers
-- **Promotion**: `lookout promote` transpiles validated patterns into enforcement rules, with optional LLM-based Semgrep rule generation (`--generate-check`)
+- **Promotion**: `lookout promote` transpiles validated patterns into enforcement rules; `--generate-check` has an LLM write the Semgrep check and verifies it against the pattern's examples with real Semgrep before saving
 
 ### Lookout TUI — Pattern Registry and Generation Pipeline
 
@@ -86,7 +86,7 @@ uv run lookout research --focus "architectural patterns" --docs . --no-llm
 
 # Validate and promote a discovered pattern to an enforcement rule
 uv run lookout validate ARCH-DI-001
-uv run lookout promote ARCH-DI-001
+uv run lookout promote ARCH-DI-001 --generate-check
 
 # Launch the TUI for browsing and generating patterns
 uv run lookout-tui

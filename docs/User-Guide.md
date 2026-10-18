@@ -64,12 +64,53 @@ lookout research --focus "architectural patterns" --docs .
 # Mark a discovered pattern as reviewed
 lookout validate PATTERN-ID
 
-# Promote to an enforcement rule
+# Promote a pattern that already carries a proposed_check
 lookout promote PATTERN-ID
 
-# Promote with LLM-generated Semgrep rule
+# Have an LLM write the Semgrep check, verified against the pattern's examples
 lookout promote PATTERN-ID --generate-check
 ```
+
+#### Generated checks are verified with Semgrep before they are saved
+
+With `--generate-check`, the LLM's check is not trusted on the strength of
+schema validation alone. Lookout compiles it, writes the pattern's good and bad
+examples to a temporary directory, and runs the real `semgrep` binary over them.
+The check passes only when **every bad example produces a match and no good
+example does**; Semgrep rule errors (unparseable patterns, invalid raw YAML) fail
+it too.
+
+When verification fails, the rejected check and the report (unmatched bad
+examples, matched good examples, rule errors) are appended to the next prompt
+and the LLM is asked again. This repeats up to `--max-attempts` times (default
+3, also `promote_max_attempts` in config). If the last attempt still fails,
+`promote` prints the report, exits non-zero and writes nothing. Pass `--force`
+to save the unverified check anyway and fix it by hand.
+
+```bash
+lookout promote PATTERN-ID --generate-check --max-attempts 5
+lookout promote PATTERN-ID --generate-check --force   # save even if unverified
+```
+
+Patterns whose examples use a language Lookout cannot map to a file extension
+are skipped in verification and listed in the report. A pattern with no examples
+at all passes vacuously; add examples to get a meaningful check.
+
+#### No placeholder rules
+
+A promoted spec is an enforcement rule, so `promote` refuses to invent one.
+Without `--generate-check`, the validated pattern must already carry a
+`proposed_check`; otherwise the command exits with an error pointing at
+`--generate-check`. (Earlier versions wrote a `pattern_discovery` check with the
+wildcard pattern `"..."`, which compiled into a rule matching every file.)
+
+#### Promoted rules start as warnings
+
+Regardless of the severity recorded during discovery, a promoted rule is written
+with `severity: warning` so an unreviewed, machine-written rule never fails a
+build on its own. The discovered severity still drives the pattern's tier.
+Once you have reviewed the rule, raise it in the YAML or pass
+`--severity error` at promotion time.
 
 ### Configuration
 

@@ -23,6 +23,7 @@ from lookout.models import (
     RequiredWithCheck,
 )
 from lookout.rule_generator import RuleGenerator
+from lookout.rule_verifier import ExampleOutcome, VerificationReport
 
 
 def _make_validated_pattern(
@@ -599,8 +600,8 @@ class TestGenerateCheckIntegration:
         assert len(config["rules"]) == 1
 
     @pytest.mark.asyncio
-    async def test_none_check_falls_through_to_placeholder(self) -> None:
-        from lookout.promotion import promote_to_spec
+    async def test_none_check_cannot_be_promoted(self) -> None:
+        from lookout.promotion import PromotionError, promote_to_spec
 
         # Simulate LLM returning garbage → generate_check returns None
         mock_resp = _anthropic_response("garbage")
@@ -617,6 +618,138 @@ class TestGenerateCheckIntegration:
             result = await gen.generate_check(pattern)
 
         assert result is None
-        spec = promote_to_spec(pattern, check_override=None)
-        # Should fall through to PatternDiscoveryCheck placeholder
-        assert isinstance(spec.rule.check, PatternDiscoveryCheck)
+        # No placeholder fallback: a pattern without a check cannot become a rule
+        with pytest.raises(PromotionError):
+            promote_to_spec(pattern, check_override=None)
+
+
+class TestGenerateVerifiedCheck:
+    """The generate→verify retry loop, with both the LLM and Semgrep mocked."""
+
+    @staticmethod
+    def _failing_report(detail: str = "bad example #1") -> VerificationReport:
+        report = VerificationReport()
+        report.unmatched_bad.append(
+            ExampleOutcome(kind="bad", index=0, language="python", code="x = Repo()")
+        )
+        report.notes.append(detail)
+        return report
+
+    @staticmethod
+    def _llm(*texts: str) -> AsyncMock:
+        """Return canned Anthropic responses, one per call (last one repeats)."""
+        queue = [_anthropic_response(t) for t in texts]
+        return AsyncMock(side_effect=lambda prompt: queue.pop(0) if len(queue) > 1 else queue[0])
+
+    @pytest.mark.asyncio
+    async def test_passes_first_time(self) -> None:
+        verifier = Mock(return_value=VerificationReport())
+        async with RuleGenerator(api_key="k") as gen:
+            gen._call_llm_with_retry = self._llm(  # type: ignore[method-assign]
+                json.dumps({"type": "forbidden", "pattern": "Repo()"})
+            )
+            outcome = await gen.generate_verified_check(
+                _make_validated_pattern(), max_attempts=3, verifier=verifier
+            )
+        assert outcome.verified
+        assert outcome.attempts == 1
+        assert verifier.call_count == 1
+        assert isinstance(outcome.generated.check, ForbiddenCheck)  # type: ignore[union-attr]
+
+    @pytest.mark.asyncio
+    async def test_retries_with_report_in_prompt(self) -> None:
+        reports = [self._failing_report("first-failure-marker"), VerificationReport()]
+        verifier = Mock(side_effect=lambda check, pattern: reports.pop(0))
+        async with RuleGenerator(api_key="k") as gen:
+            llm = self._llm(
+                json.dumps({"type": "forbidden", "pattern": "Wrong()"}),
+                json.dumps({"type": "forbidden", "pattern": "Repo()"}),
+            )
+            gen._call_llm_with_retry = llm  # type: ignore[method-assign]
+            outcome = await gen.generate_verified_check(
+                _make_validated_pattern(), max_attempts=3, verifier=verifier
+            )
+
+        assert outcome.verified
+        assert outcome.attempts == 2
+        assert outcome.generated.check.pattern == "Repo()"  # type: ignore[union-attr]
+        first_prompt = llm.await_args_list[0].args[0]
+        second_prompt = llm.await_args_list[1].args[0]
+        assert "Previous Attempt Failed Verification" not in first_prompt
+        assert "Previous Attempt Failed Verification" in second_prompt
+        assert "Wrong()" in second_prompt  # the rejected check
+        assert "first-failure-marker" in second_prompt  # the report
+        assert "x = Repo()" in second_prompt  # the unmatched bad example
+
+    @pytest.mark.asyncio
+    async def test_gives_up_after_max_attempts_and_returns_last_candidate(self) -> None:
+        verifier = Mock(side_effect=lambda check, pattern: self._failing_report())
+        async with RuleGenerator(api_key="k") as gen:
+            llm = self._llm(json.dumps({"type": "forbidden", "pattern": "Wrong()"}))
+            gen._call_llm_with_retry = llm  # type: ignore[method-assign]
+            outcome = await gen.generate_verified_check(
+                _make_validated_pattern(), max_attempts=3, verifier=verifier
+            )
+
+        assert not outcome.verified
+        assert outcome.attempts == 3
+        assert llm.await_count == 3
+        assert verifier.call_count == 3
+        assert outcome.generated is not None
+        assert outcome.generated.check.pattern == "Wrong()"  # type: ignore[union-attr]
+        assert outcome.report is not None and not outcome.report.passed
+
+    @pytest.mark.asyncio
+    async def test_max_attempts_one_means_no_retry(self) -> None:
+        verifier = Mock(side_effect=lambda check, pattern: self._failing_report())
+        async with RuleGenerator(api_key="k") as gen:
+            llm = self._llm(json.dumps({"type": "forbidden", "pattern": "Wrong()"}))
+            gen._call_llm_with_retry = llm  # type: ignore[method-assign]
+            outcome = await gen.generate_verified_check(
+                _make_validated_pattern(), max_attempts=1, verifier=verifier
+            )
+        assert not outcome.verified
+        assert llm.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_unparseable_response_counts_as_attempt_and_feeds_back(self) -> None:
+        verifier = Mock(return_value=VerificationReport())
+        async with RuleGenerator(api_key="k") as gen:
+            llm = self._llm(
+                "not json at all",
+                json.dumps({"type": "forbidden", "pattern": "Repo()"}),
+            )
+            gen._call_llm_with_retry = llm  # type: ignore[method-assign]
+            outcome = await gen.generate_verified_check(
+                _make_validated_pattern(), max_attempts=3, verifier=verifier
+            )
+        assert outcome.verified
+        assert outcome.attempts == 2
+        assert verifier.call_count == 1
+        assert "could not be parsed" in llm.await_args_list[1].args[0]
+
+    @pytest.mark.asyncio
+    async def test_never_parseable_returns_no_candidate(self) -> None:
+        verifier = Mock(return_value=VerificationReport())
+        async with RuleGenerator(api_key="k") as gen:
+            gen._call_llm_with_retry = self._llm("garbage")  # type: ignore[method-assign]
+            outcome = await gen.generate_verified_check(
+                _make_validated_pattern(), max_attempts=2, verifier=verifier
+            )
+        assert outcome.generated is None
+        assert outcome.report is None
+        assert outcome.attempts == 2
+        assert not outcome.verified
+        verifier.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_zero_attempts_rejected(self) -> None:
+        async with RuleGenerator(api_key="k") as gen:
+            with pytest.raises(ValueError):
+                await gen.generate_verified_check(_make_validated_pattern(), max_attempts=0)
+
+    def test_prompt_without_feedback_has_no_feedback_section(self) -> None:
+        gen = RuleGenerator(api_key="k")
+        assert "Previous Attempt Failed Verification" not in gen._build_prompt(
+            _make_validated_pattern()
+        )

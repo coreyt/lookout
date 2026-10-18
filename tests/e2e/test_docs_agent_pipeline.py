@@ -17,6 +17,7 @@ from lookout.discovery.models import (
     PatternExamples,
 )
 from lookout.discovery.storage import PatternStorage
+from lookout.models import ForbiddenCheck
 
 
 def _write_architecture_doc(root: Path) -> Path:
@@ -108,6 +109,8 @@ class TestDocsAgentE2E:
             discovered_by="docs-agent",
             source_files=["ARCHITECTURE.md"],
             examples=PatternExamples(),
+            # promote without --generate-check needs a real check; there is no placeholder
+            proposed_check=ForbiddenCheck(type="forbidden", pattern="OrderRepo()"),
         )
         storage.save_pattern(raw, "raw")
 
@@ -128,7 +131,7 @@ class TestDocsAgentE2E:
         assert result.exit_code == 0, f"validate failed: {result.output}"
         assert "Validated ARCH-DI-001" in result.output
 
-        # Promote (no --generate-check, uses placeholder)
+        # Promote (no --generate-check, uses the pattern's proposed_check)
         result = runner.invoke(
             cli,
             [
@@ -149,6 +152,9 @@ class TestDocsAgentE2E:
         spec_data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
         assert spec_data["rule"]["id"] == "ARCH-DI-001"
         assert spec_data["rule"]["tier"] == 1
+        assert spec_data["rule"]["check"]["type"] == "forbidden"
+        # Promoted rules start as warnings until reviewed
+        assert spec_data["rule"]["severity"] == "warning"
 
     def test_no_docs_found_exits_gracefully(self, tmp_path: Path) -> None:
         """Empty directory → exits with message, no error."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from lookout.discovery.models import (
@@ -12,13 +13,15 @@ from lookout.discovery.models import (
     PatternExamples,
     ValidatedPattern,
 )
-from lookout.models import ForbiddenCheck, PatternDiscoveryCheck
-from lookout.promotion import promote_to_spec, save_spec
+from lookout.models import ForbiddenCheck
+from lookout.promotion import DEFAULT_PROMOTED_SEVERITY, PromotionError, promote_to_spec, save_spec
+
+DEFAULT_CHECK = ForbiddenCheck(type="forbidden", pattern="Repo()")
 
 
 def _discovered(
     pattern_id: str = "ARCH-DI-001",
-    proposed_check: ForbiddenCheck | None = None,
+    proposed_check: ForbiddenCheck | None = DEFAULT_CHECK,
     references: list[str] | None = None,
     severity: str = "error",
     confidence: str = "high",
@@ -45,7 +48,7 @@ def _discovered(
 
 def _validated(
     pattern_id: str = "ARCH-DI-001",
-    proposed_check: ForbiddenCheck | None = None,
+    proposed_check: ForbiddenCheck | None = DEFAULT_CHECK,
     references: list[str] | None = None,
     tier_override: int | None = None,
 ) -> ValidatedPattern:
@@ -80,24 +83,30 @@ class TestPromoteToSpec:
         result = promote_to_spec(_validated(proposed_check=check))
         assert result.rule.check == check
 
-    def test_falls_back_to_pattern_discovery_check_when_no_proposed_check(self) -> None:
-        result = promote_to_spec(_validated(proposed_check=None))
-        assert isinstance(result.rule.check, PatternDiscoveryCheck)
-        assert result.rule.check.type == "pattern_discovery"
+    def test_check_override_wins_over_proposed_check(self) -> None:
+        override = ForbiddenCheck(type="forbidden", pattern="Other()")
+        result = promote_to_spec(_validated(proposed_check=DEFAULT_CHECK), check_override=override)
+        assert result.rule.check == override
 
-    def test_pattern_discovery_fallback_has_wildcard_pattern(self) -> None:
-        result = promote_to_spec(_validated(proposed_check=None))
-        assert isinstance(result.rule.check, PatternDiscoveryCheck)
-        assert "..." in result.rule.check.patterns  # type: ignore[union-attr]
+    def test_no_check_raises_promotion_error(self) -> None:
+        """No placeholder: an enforcement rule needs a real check."""
+        with pytest.raises(PromotionError, match="--generate-check"):
+            promote_to_spec(_validated(proposed_check=None))
 
-    def test_raw_check_fallback_is_pattern_discovery_type(self) -> None:
-        result = promote_to_spec(_validated(proposed_check=None))
-        assert isinstance(result.rule.check, PatternDiscoveryCheck)
+    def test_promotion_error_names_pattern(self) -> None:
+        with pytest.raises(PromotionError, match="ARCH-DI-001"):
+            promote_to_spec(_validated(pattern_id="ARCH-DI-001", proposed_check=None))
 
-    def test_pattern_discovery_fallback_is_runnable(self) -> None:
-        result = promote_to_spec(_validated(proposed_check=None))
-        assert isinstance(result.rule.check, PatternDiscoveryCheck)
-        assert len(result.rule.check.patterns) > 0
+    def test_severity_defaults_to_warning_regardless_of_discovered(self) -> None:
+        discovered = _discovered(severity="error")
+        validated = ValidatedPattern.from_discovered(discovered, validated_by="reviewer")
+        result = promote_to_spec(validated)
+        assert DEFAULT_PROMOTED_SEVERITY == "warning"
+        assert result.rule.severity == "warning"
+
+    def test_severity_override(self) -> None:
+        result = promote_to_spec(_validated(), severity="error")
+        assert result.rule.severity == "error"
 
     def test_first_reference_used_as_documentation_url(self) -> None:
         refs = ["https://docs.example.com/di", "https://example.com/other"]
@@ -222,7 +231,7 @@ class TestPromoteToSpecCheckOverride:
         result = promote_to_spec(_validated(proposed_check=proposed), check_override=override)
         assert result.rule.check == override
 
-    def test_check_override_beats_fallback(self) -> None:
+    def test_check_override_rescues_pattern_without_proposed_check(self) -> None:
         override = ForbiddenCheck(type="forbidden", pattern="Override()")
         result = promote_to_spec(_validated(proposed_check=None), check_override=override)
         assert result.rule.check == override
@@ -232,7 +241,6 @@ class TestPromoteToSpecCheckOverride:
         result = promote_to_spec(_validated(proposed_check=proposed), check_override=None)
         assert result.rule.check == proposed
 
-    def test_none_override_no_proposed_falls_to_placeholder(self) -> None:
-        result = promote_to_spec(_validated(proposed_check=None), check_override=None)
-        assert isinstance(result.rule.check, PatternDiscoveryCheck)
-        assert "..." in result.rule.check.patterns
+    def test_none_override_no_proposed_raises(self) -> None:
+        with pytest.raises(PromotionError):
+            promote_to_spec(_validated(proposed_check=None), check_override=None)
