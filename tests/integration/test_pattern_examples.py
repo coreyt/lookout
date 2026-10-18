@@ -133,6 +133,10 @@ def _run_variant(variant_key: tuple[str, str, str | None]) -> dict[str, list[dic
     spec = _single_variant_spec(cases[0].spec, language, framework)
     config = compile_semgrep_config([spec])
     assert config["rules"], f"{pattern_id} {language}/{framework} compiled to no rules"
+    # Examples exercise the pattern itself, not where it applies: the temp files
+    # written below would never satisfy a spec's `paths.include` globs.
+    for rule in config["rules"]:
+        rule.pop("paths", None)
 
     with tempfile.TemporaryDirectory(prefix="lookout-examples-") as tmp:
         tmp_path = Path(tmp)
