@@ -51,6 +51,8 @@ class LookoutConfig(BaseModel):
     llm_max_tokens: int = Field(default=4096)
     llm_max_retries: int = Field(default=3)
     llm_timeout: float = Field(default=60.0)
+    #: Generate→verify rounds `lookout promote --generate-check` makes before giving up.
+    promote_max_attempts: int = Field(default=3, ge=1)
 
     # Batch settings
     batch_provider: str | None = Field(default=None)

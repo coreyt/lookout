@@ -13,7 +13,7 @@ import click
 if TYPE_CHECKING:
     from lookout.discovery.models import DiscoveredPattern, ValidatedPattern
     from lookout.discovery.search.providers import SearchProvider
-    from lookout.rule_generator import GeneratedCheck
+    from lookout.rule_generator import VerifiedGeneration
 
 from lookout.config import LookoutConfig
 from lookout.project import detect_profile, select_specs
@@ -331,6 +331,26 @@ def init(rules_dir: Path, copy_built_in_rules: bool, non_interactive: bool) -> N
     default=None,
     help="LLM model name. Defaults to config or provider default.",
 )
+@click.option(
+    "--max-attempts",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "Generate→verify rounds before giving up (with --generate-check). "
+        "Defaults to config promote_max_attempts (3)."
+    ),
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Save the generated check even if Semgrep verification failed.",
+)
+@click.option(
+    "--severity",
+    type=click.Choice(["error", "warning", "info"]),
+    default=None,
+    help="Severity for the promoted rule. Defaults to 'warning' until reviewed.",
+)
 def promote(
     pattern_id: str,
     patterns_dir: Path | None,
@@ -338,15 +358,29 @@ def promote(
     generate_check: bool,
     provider: str | None,
     model: str | None,
+    max_attempts: int | None,
+    force: bool,
+    severity: str | None,
 ) -> None:
-    """Promote a validated pattern to an enforcement rule."""
+    """Promote a validated pattern to an enforcement rule.
+
+    With --generate-check, an LLM writes a Semgrep check which is then compiled
+    and run against the pattern's good/bad examples with real Semgrep. The rule
+    is saved only once every bad example matches and no good example does; each
+    failed round feeds the verification report back into the next prompt. After
+    --max-attempts rounds the report is printed and nothing is written unless
+    --force is given.
+
+    Without --generate-check the pattern must already carry a proposed_check;
+    there is no placeholder fallback.
+    """
     config = click.get_current_context().obj["config"]
     final_patterns_dir = patterns_dir or config.patterns_dir
     final_output_dir = output_dir or config.rules_dir
 
     from lookout.discovery.models import ValidatedPattern
     from lookout.discovery.storage import PatternStorage
-    from lookout.promotion import promote_to_spec, save_spec
+    from lookout.promotion import PromotionError, promote_to_spec, save_spec
 
     storage = PatternStorage(final_patterns_dir)
 
@@ -359,23 +393,58 @@ def promote(
         )
         sys.exit(1)
 
-    # Optionally generate a check via LLM
+    # Optionally generate (and verify) a check via LLM
     check_override = None
     scaffolding = None
     if generate_check:
-        generated = asyncio.run(_generate_check(pattern, config, provider, model))
-        if generated:
-            import json
+        import json
 
-            check_override = generated.check
-            scaffolding = generated.scaffolding
-            check_json = check_override.model_dump(mode="json")
-            click.echo(f"Generated check: {json.dumps(check_json, indent=2)}", err=True)
+        attempts = max_attempts or config.promote_max_attempts
+        outcome = asyncio.run(_generate_check(pattern, config, provider, model, attempts))
+        if outcome is None or outcome.generated is None:
+            click.echo(
+                f"Error: Check generation failed after {attempts} attempt(s); "
+                f"{pattern_id} was not promoted.",
+                err=True,
+            )
+            sys.exit(1)
+
+        check_override = outcome.generated.check
+        scaffolding = outcome.generated.scaffolding
+        check_json = check_override.model_dump(mode="json")
+        click.echo(f"Generated check: {json.dumps(check_json, indent=2)}", err=True)
+
+        report = outcome.report
+        assert report is not None
+        if report.passed:
+            click.echo(
+                f"✓ Verified against examples with Semgrep in {outcome.attempts} attempt(s)",
+                err=True,
+            )
         else:
-            click.echo("Warning: Check generation failed, using placeholder", err=True)
+            click.echo(
+                f"Verification failed after {outcome.attempts} attempt(s):\n{report.format()}",
+                err=True,
+            )
+            if not force:
+                click.echo(
+                    f"Error: {pattern_id} was not promoted. Re-run with --force to save the "
+                    "unverified check anyway.",
+                    err=True,
+                )
+                sys.exit(1)
+            click.echo("Warning: --force given, saving unverified check", err=True)
 
     # Promote to spec
-    spec = promote_to_spec(pattern, check_override=check_override)
+    try:
+        spec = promote_to_spec(
+            pattern,
+            check_override=check_override,
+            severity=severity,  # type: ignore[arg-type]
+        )
+    except PromotionError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
 
     # Save to rules directory
     save_path = save_spec(spec, final_output_dir, scaffolding=scaffolding)
@@ -388,10 +457,13 @@ async def _generate_check(
     config: LookoutConfig,
     provider_override: str | None = None,
     model_override: str | None = None,
-) -> GeneratedCheck | None:
-    """Generate a RuleCheck using the LLM rule generator.
+    max_attempts: int = 3,
+) -> VerifiedGeneration | None:
+    """Generate and Semgrep-verify a RuleCheck using the LLM rule generator.
 
-    Returns None on any failure (missing API key, network error, parse failure).
+    Returns None when the generator cannot even be constructed or called
+    (missing API key, network error); otherwise the loop's outcome, whose
+    ``generated`` is None if no attempt produced a parseable check.
     """
     from lookout.discovery.extractors.llm import LLMProvider
     from lookout.rule_generator import RuleGenerator
@@ -407,7 +479,7 @@ async def _generate_check(
             max_tokens=config.llm_max_tokens,
             max_retries=config.llm_max_retries,
         ) as gen:
-            return await gen.generate_check(pattern)
+            return await gen.generate_verified_check(pattern, max_attempts=max_attempts)
     except Exception as e:
         click.echo(f"Warning: {e}", err=True)
         return None

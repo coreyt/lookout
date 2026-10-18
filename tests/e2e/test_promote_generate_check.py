@@ -1,7 +1,8 @@
 """End-to-end test: research → validate → promote --generate-check.
 
 Exercises the full discovery-to-enforcement pipeline using real filesystem
-storage and the CLI, with only the LLM HTTP call mocked.
+storage and the CLI, with only the LLM HTTP call mocked. Generated checks are
+verified against the pattern's examples with the real Semgrep binary.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -21,8 +23,8 @@ from lookout.discovery.models import (
     ValidatedPattern,
 )
 from lookout.discovery.storage import PatternStorage
-from lookout.models import ForbiddenCheck, PatternDiscoveryCheck
-from lookout.promotion import promote_to_spec
+from lookout.models import ForbiddenCheck
+from lookout.promotion import PromotionError, promote_to_spec
 from lookout.semgrep import compile_semgrep_config
 
 
@@ -71,25 +73,60 @@ def _sample_discovered() -> DiscoveredPattern:
     )
 
 
-def _mock_anthropic_post(check_json: str) -> AsyncMock:
-    """Build an AsyncMock that returns a canned Anthropic response."""
-    return AsyncMock(
-        return_value=Mock(
-            status_code=200,
-            json=lambda: {
-                "id": "msg_e2e",
-                "content": [{"text": check_json}],
-                "usage": {"input_tokens": 800, "output_tokens": 150},
-            },
-            raise_for_status=lambda: None,
-        )
+def _anthropic_response(text: str) -> Mock:
+    return Mock(
+        status_code=200,
+        json=lambda: {
+            "id": "msg_e2e",
+            "content": [{"text": text}],
+            "usage": {"input_tokens": 800, "output_tokens": 150},
+        },
+        raise_for_status=lambda: None,
     )
+
+
+def _mock_anthropic_post(*texts: str) -> AsyncMock:
+    """Build an AsyncMock returning canned Anthropic responses, one per call.
+
+    The last response is repeated if the generator asks for more.
+    """
+    responses = [_anthropic_response(t) for t in texts]
+    mock = AsyncMock(
+        side_effect=lambda *a, **kw: responses.pop(0) if len(responses) > 1 else responses[0]
+    )
+    return mock
+
+
+def _patch_llm(monkeypatch: pytest.MonkeyPatch, post: AsyncMock) -> None:
+    """Install ``post`` as the httpx client's post inside RuleGenerator."""
+    import lookout.rule_generator as rg
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-e2e")
+    original_aenter = rg.RuleGenerator.__aenter__
+
+    async def patched_aenter(self: rg.RuleGenerator) -> rg.RuleGenerator:
+        inst = await original_aenter(self)
+        assert inst._client is not None
+        inst._client.post = post  # type: ignore[method-assign]
+        return inst
+
+    monkeypatch.setattr(rg.RuleGenerator, "__aenter__", patched_aenter)
+
+
+def _seed_validated(patterns_dir: Path) -> None:
+    storage = PatternStorage(patterns_dir)
+    raw = _sample_discovered()
+    storage.save_pattern(raw, "raw")
+    validated = ValidatedPattern.from_discovered(raw, validated_by="e2e-test")
+    storage.save_pattern(validated, "validated")
 
 
 class TestPromoteWithGenerateCheckE2E:
     """Full pipeline e2e: disk storage → CLI validate → CLI promote --generate-check."""
 
-    def test_full_pipeline_raw_to_enforced_rule(self, tmp_path: Path, monkeypatch: object) -> None:
+    def test_full_pipeline_raw_to_enforced_rule(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Raw pattern on disk → validate CLI → promote --generate-check → YAML with real check."""
         patterns_dir = tmp_path / ".lookout-patterns"
         rules_dir = tmp_path / ".lookout-rules"
@@ -132,22 +169,7 @@ class TestPromoteWithGenerateCheckE2E:
 
         # ── Step 3: Promote with --generate-check (LLM mocked) ─────────
         check_json = json.dumps({"type": "forbidden", "pattern": "OrderRepo()"})
-
-        # RuleGenerator.__init__ needs an API key
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-e2e")  # type: ignore[attr-defined]
-
-        # Mock the httpx client inside RuleGenerator
-        import lookout.rule_generator as rg
-
-        original_aenter = rg.RuleGenerator.__aenter__
-
-        async def patched_aenter(self: rg.RuleGenerator) -> rg.RuleGenerator:
-            inst = await original_aenter(self)
-            assert inst._client is not None
-            inst._client.post = _mock_anthropic_post(check_json)  # type: ignore[assignment]
-            return inst
-
-        monkeypatch.setattr(rg.RuleGenerator, "__aenter__", patched_aenter)  # type: ignore[attr-defined]
+        _patch_llm(monkeypatch, _mock_anthropic_post(check_json))
 
         result = runner.invoke(
             cli,
@@ -177,7 +199,9 @@ class TestPromoteWithGenerateCheckE2E:
         assert spec_data["rule"]["check"]["type"] == "forbidden"
         assert spec_data["rule"]["check"]["pattern"] == "OrderRepo()"
         assert spec_data["rule"]["tier"] == 1
-        assert spec_data["rule"]["severity"] == "error"
+        # Promoted rules start as warnings until reviewed, even for an "error" pattern
+        assert spec_data["rule"]["severity"] == "warning"
+        assert "Verified against examples" in result.output
 
         # ── Step 5: Verify it compiles to valid Semgrep config ──────────
         from lookout.models import RuleSpecFile
@@ -189,19 +213,17 @@ class TestPromoteWithGenerateCheckE2E:
         semgrep_rule = config["rules"][0]
         assert semgrep_rule["id"] == "arch-di-001-impl"
         assert semgrep_rule["languages"] == ["python"]
-        assert semgrep_rule["severity"] == "ERROR"
+        assert semgrep_rule["severity"] == "WARNING"
 
-    def test_promote_without_generate_check_uses_placeholder(self, tmp_path: Path) -> None:
-        """Without --generate-check, promote falls back to PatternDiscoveryCheck placeholder."""
+    def test_promote_without_check_is_refused(self, tmp_path: Path) -> None:
+        """Without --generate-check and without a proposed_check, nothing is written.
+
+        The old ``["..."]`` placeholder compiled into a rule that matched
+        everything; promote now errors out and points at --generate-check.
+        """
         patterns_dir = tmp_path / ".lookout-patterns"
         rules_dir = tmp_path / ".lookout-rules"
-
-        # Save raw + validate in-process (not via CLI to keep test focused)
-        storage = PatternStorage(patterns_dir)
-        raw = _sample_discovered()
-        storage.save_pattern(raw, "raw")
-        validated = ValidatedPattern.from_discovered(raw, validated_by="e2e-test")
-        storage.save_pattern(validated, "validated")
+        _seed_validated(patterns_dir)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -215,53 +237,19 @@ class TestPromoteWithGenerateCheckE2E:
                 str(rules_dir),
             ],
         )
-        assert result.exit_code == 0, f"promote failed: {result.output}"
+        assert result.exit_code == 1
+        assert "no enforcement check" in result.output
+        assert "--generate-check" in result.output
+        assert not (rules_dir / "ARCH-DI-001.yaml").exists()
 
-        yaml_path = rules_dir / "ARCH-DI-001.yaml"
-        spec_data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
-
-        # Should use placeholder since no --generate-check and no proposed_check
-        assert spec_data["rule"]["check"]["type"] == "pattern_discovery"
-        assert "..." in spec_data["rule"]["check"]["patterns"]
-
-    def test_promote_generate_check_llm_failure_falls_back(
-        self, tmp_path: Path, monkeypatch: object
+    def test_promote_generate_check_llm_failure_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When LLM fails, promote still succeeds with placeholder check."""
+        """When the LLM never yields a parseable check, promote exits 1 and writes nothing."""
         patterns_dir = tmp_path / ".lookout-patterns"
         rules_dir = tmp_path / ".lookout-rules"
-
-        storage = PatternStorage(patterns_dir)
-        raw = _sample_discovered()
-        storage.save_pattern(raw, "raw")
-        validated = ValidatedPattern.from_discovered(raw, validated_by="e2e-test")
-        storage.save_pattern(validated, "validated")
-
-        # RuleGenerator.__init__ needs an API key
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-e2e")  # type: ignore[attr-defined]
-
-        # Mock the LLM to return garbage
-        import lookout.rule_generator as rg
-
-        original_aenter = rg.RuleGenerator.__aenter__
-
-        async def patched_aenter(self: rg.RuleGenerator) -> rg.RuleGenerator:
-            inst = await original_aenter(self)
-            assert inst._client is not None
-            inst._client.post = AsyncMock(  # type: ignore[assignment]
-                return_value=Mock(
-                    status_code=200,
-                    json=lambda: {
-                        "id": "msg_bad",
-                        "content": [{"text": "I cannot generate a check for this pattern."}],
-                        "usage": {"input_tokens": 100, "output_tokens": 50},
-                    },
-                    raise_for_status=lambda: None,
-                )
-            )
-            return inst
-
-        monkeypatch.setattr(rg.RuleGenerator, "__aenter__", patched_aenter)  # type: ignore[attr-defined]
+        _seed_validated(patterns_dir)
+        _patch_llm(monkeypatch, _mock_anthropic_post("I cannot generate a check for this."))
 
         runner = CliRunner()
         result = runner.invoke(
@@ -276,52 +264,28 @@ class TestPromoteWithGenerateCheckE2E:
                 "--generate-check",
                 "--provider",
                 "anthropic",
+                "--max-attempts",
+                "2",
             ],
             catch_exceptions=False,
         )
 
-        assert result.exit_code == 0, f"promote failed: {result.output}"
-        assert "Promoted ARCH-DI-001" in result.output
+        assert result.exit_code == 1, result.output
+        assert "Check generation failed after 2 attempt(s)" in result.output
+        assert not (rules_dir / "ARCH-DI-001.yaml").exists()
 
-        yaml_path = rules_dir / "ARCH-DI-001.yaml"
-        spec_data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
-
-        # Should fall back to placeholder
-        assert spec_data["rule"]["check"]["type"] == "pattern_discovery"
-
-    def test_promote_generate_check_must_wrap(self, tmp_path: Path, monkeypatch: object) -> None:
-        """LLM generates a must_wrap check — verify it compiles correctly."""
+    def test_promote_retries_with_report_then_saves_verified_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A wrong first check is rejected by real Semgrep; the corrected retry is saved."""
         patterns_dir = tmp_path / ".lookout-patterns"
         rules_dir = tmp_path / ".lookout-rules"
+        _seed_validated(patterns_dir)
 
-        storage = PatternStorage(patterns_dir)
-        raw = _sample_discovered()
-        storage.save_pattern(raw, "raw")
-        validated = ValidatedPattern.from_discovered(raw, validated_by="e2e-test")
-        storage.save_pattern(validated, "validated")
-
-        check_json = json.dumps(
-            {
-                "type": "must_wrap",
-                "target": ["OrderRepo()"],
-                "wrapper": ["inject"],
-            }
-        )
-
-        # RuleGenerator.__init__ needs an API key
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-e2e")  # type: ignore[attr-defined]
-
-        import lookout.rule_generator as rg
-
-        original_aenter = rg.RuleGenerator.__aenter__
-
-        async def patched_aenter(self: rg.RuleGenerator) -> rg.RuleGenerator:
-            inst = await original_aenter(self)
-            assert inst._client is not None
-            inst._client.post = _mock_anthropic_post(check_json)  # type: ignore[assignment]
-            return inst
-
-        monkeypatch.setattr(rg.RuleGenerator, "__aenter__", patched_aenter)  # type: ignore[attr-defined]
+        wrong = json.dumps({"type": "forbidden", "pattern": "SomethingElse()"})
+        right = json.dumps({"type": "forbidden", "pattern": "OrderRepo()"})
+        post = _mock_anthropic_post(wrong, right)
+        _patch_llm(monkeypatch, post)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -338,6 +302,125 @@ class TestPromoteWithGenerateCheckE2E:
             catch_exceptions=False,
         )
 
+        assert result.exit_code == 0, result.output
+        assert post.await_count == 2
+        # The second prompt carried the verification report for the first check
+        second_prompt = post.await_args_list[1].kwargs["json"]["messages"][0]["content"]
+        assert "Previous Attempt Failed Verification" in second_prompt
+        assert "SomethingElse()" in second_prompt
+        assert "bad example(s) were NOT matched" in second_prompt
+
+        spec_data = yaml.safe_load((rules_dir / "ARCH-DI-001.yaml").read_text(encoding="utf-8"))
+        assert spec_data["rule"]["check"]["pattern"] == "OrderRepo()"
+
+    def test_promote_refuses_unverified_check_unless_forced(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A check that never passes Semgrep verification is not saved without --force."""
+        patterns_dir = tmp_path / ".lookout-patterns"
+        rules_dir = tmp_path / ".lookout-rules"
+        _seed_validated(patterns_dir)
+        _patch_llm(
+            monkeypatch,
+            _mock_anthropic_post(json.dumps({"type": "forbidden", "pattern": "SomethingElse()"})),
+        )
+
+        runner = CliRunner()
+        args = [
+            "promote",
+            "ARCH-DI-001",
+            "--patterns-dir",
+            str(patterns_dir),
+            "--output-dir",
+            str(rules_dir),
+            "--generate-check",
+            "--max-attempts",
+            "2",
+        ]
+        result = runner.invoke(cli, args, catch_exceptions=False)
+        assert result.exit_code == 1, result.output
+        assert "Verification failed after 2 attempt(s)" in result.output
+        assert "bad example(s) were NOT matched" in result.output
+        assert "--force" in result.output
+        assert not (rules_dir / "ARCH-DI-001.yaml").exists()
+
+        result = runner.invoke(cli, [*args, "--force"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        assert "saving unverified check" in result.output
+        spec_data = yaml.safe_load((rules_dir / "ARCH-DI-001.yaml").read_text(encoding="utf-8"))
+        assert spec_data["rule"]["check"]["pattern"] == "SomethingElse()"
+
+    def test_promote_severity_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patterns_dir = tmp_path / ".lookout-patterns"
+        rules_dir = tmp_path / ".lookout-rules"
+        _seed_validated(patterns_dir)
+        _patch_llm(
+            monkeypatch,
+            _mock_anthropic_post(json.dumps({"type": "forbidden", "pattern": "OrderRepo()"})),
+        )
+
+        result = CliRunner().invoke(
+            cli,
+            [
+                "promote",
+                "ARCH-DI-001",
+                "--patterns-dir",
+                str(patterns_dir),
+                "--output-dir",
+                str(rules_dir),
+                "--generate-check",
+                "--severity",
+                "error",
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        spec_data = yaml.safe_load((rules_dir / "ARCH-DI-001.yaml").read_text(encoding="utf-8"))
+        assert spec_data["rule"]["severity"] == "error"
+
+    def test_promote_generate_check_must_wrap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A must_wrap check that compiles but never fires is caught by verification.
+
+        ``must_wrap`` compiles to a rule about calls inside functions lacking a
+        wrapper decorator; it does not flag ``self.repo = OrderRepo()`` in the
+        bad example. Schema validation alone used to let this through. With
+        --force the check is still saved and compiles.
+        """
+        patterns_dir = tmp_path / ".lookout-patterns"
+        rules_dir = tmp_path / ".lookout-rules"
+        _seed_validated(patterns_dir)
+
+        check_json = json.dumps(
+            {
+                "type": "must_wrap",
+                "target": ["OrderRepo()"],
+                "wrapper": ["inject"],
+            }
+        )
+        _patch_llm(monkeypatch, _mock_anthropic_post(check_json))
+
+        runner = CliRunner()
+        args = [
+            "promote",
+            "ARCH-DI-001",
+            "--patterns-dir",
+            str(patterns_dir),
+            "--output-dir",
+            str(rules_dir),
+            "--generate-check",
+            "--max-attempts",
+            "1",
+        ]
+        result = runner.invoke(cli, args, catch_exceptions=False)
+        assert result.exit_code == 1, result.output
+        assert "bad example(s) were NOT matched" in result.output
+        assert not (rules_dir / "ARCH-DI-001.yaml").exists()
+
+        result = runner.invoke(cli, [*args, "--force"], catch_exceptions=False)
         assert result.exit_code == 0, f"promote failed: {result.output}"
 
         yaml_path = rules_dir / "ARCH-DI-001.yaml"
@@ -370,13 +453,12 @@ class TestPromoteToSpecWithRuleGeneratorUnit:
         config = compile_semgrep_config([spec])
         rules = config["rules"]
         assert len(rules) == 1
-        assert rules[0]["severity"] == "ERROR"
+        assert rules[0]["severity"] == "WARNING"
 
-    def test_no_override_produces_placeholder(self) -> None:
-        """Without override and no proposed_check, get PatternDiscoveryCheck placeholder."""
+    def test_no_override_and_no_proposed_check_raises(self) -> None:
+        """Without override and no proposed_check there is no placeholder: promotion fails."""
         raw = _sample_discovered()
         validated = ValidatedPattern.from_discovered(raw, validated_by="test")
 
-        spec = promote_to_spec(validated)
-        assert isinstance(spec.rule.check, PatternDiscoveryCheck)
-        assert "..." in spec.rule.check.patterns
+        with pytest.raises(PromotionError):
+            promote_to_spec(validated)
