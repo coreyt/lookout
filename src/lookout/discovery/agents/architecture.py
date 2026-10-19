@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from lookout import __version__
 from lookout.discovery.agents.base import SearchConstraints, SearchFocus
 from lookout.discovery.models import DiscoveredPattern
 from lookout.discovery.search import SearchQuery, WebSearchClient
@@ -239,7 +240,7 @@ class ArchitectureAgent:
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                 response = await client.get(
                     url,
-                    headers={"User-Agent": "lookout/0.1.0 pattern-discovery"},
+                    headers={"User-Agent": f"lookout/{__version__} pattern-discovery"},
                 )
                 response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")

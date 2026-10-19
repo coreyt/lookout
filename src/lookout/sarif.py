@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 
+from lookout import __version__
 from lookout.models import Finding
 
 
-def format_findings_sarif(findings: list[Finding], version: str = "0.1.0") -> str:
+def format_findings_sarif(findings: list[Finding], version: str = __version__) -> str:
     """Format findings as a SARIF JSON string.
 
     Args:

@@ -191,3 +191,10 @@ class TestBaselineState:
 
         sarif = json.loads(format_findings_sarif([replace(_finding(), baselined=True)]))
         assert sarif["runs"][0]["results"][0]["baselineState"] == "unchanged"
+
+
+def test_default_version_is_package_version() -> None:
+    from lookout import __version__
+
+    sarif = json.loads(format_findings_sarif([]))
+    assert sarif["runs"][0]["tool"]["driver"]["version"] == __version__

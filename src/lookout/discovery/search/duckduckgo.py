@@ -7,6 +7,7 @@ import logging
 import httpx
 from bs4 import BeautifulSoup
 
+from lookout import __version__
 from lookout.discovery.search.providers import SearchProviderError
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ class DuckDuckGoSearchProvider:
             response = await self._client.post(
                 "https://html.duckduckgo.com/html/",
                 data={"q": query},
-                headers={"User-Agent": "lookout/0.1.0 pattern-discovery"},
+                headers={"User-Agent": f"lookout/{__version__} pattern-discovery"},
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:

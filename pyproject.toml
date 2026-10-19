@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lookout"
-version = "0.1.0"
+version = "0.1.1"
 description = "Lookout: Intelligent code pattern enforcement and discovery tool"
 readme = "README.md"
 license = {text = "Elastic License 2.0 (ELv2)"}
