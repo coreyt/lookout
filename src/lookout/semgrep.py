@@ -325,6 +325,7 @@ def parse_semgrep_output(
     findings: list[Finding] = []
     pattern_instances: list[PatternInstance] = []
     errors: list[RuleError] = []
+    source_cache: dict[str, list[str] | None] = {}
 
     for error in errors_data:
         rule_id = _extract_pattern_id(error.get("rule_id", ""))
@@ -346,6 +347,7 @@ def parse_semgrep_output(
 
         extra = result.get("extra", {})
         title, category, severity, tier, confidence = _get_spec_metadata(spec)
+        snippet = _resolve_snippet(result, source_cache)
 
         if is_discovery_spec(spec):
             pattern_instances.append(
@@ -355,7 +357,7 @@ def parse_semgrep_output(
                     category=category,
                     file=result.get("path", ""),
                     line=result.get("start", {}).get("line", 0),
-                    snippet=_normalize_snippet(extra.get("lines", "")),
+                    snippet=snippet,
                     confidence=confidence,
                 )
             )
@@ -369,7 +371,7 @@ def parse_semgrep_output(
                     file=result.get("path", ""),
                     line=result.get("start", {}).get("line", 0),
                     message=extra.get("message", ""),
-                    snippet=_normalize_snippet(extra.get("lines", "")),
+                    snippet=snippet,
                     engine="semgrep",
                     tier=tier,
                 )
@@ -412,6 +414,39 @@ def _extract_pattern_id(check_id: str) -> str:
         return match.group(1).upper()
 
     return check_id.upper()
+
+
+# Semgrep OSS replaces the matched source with this placeholder unless logged in.
+_SNIPPET_PLACEHOLDER = "requires login"
+_MAX_SNIPPET_LINES = 20
+
+
+def _resolve_snippet(result: dict[str, Any], cache: dict[str, list[str] | None]) -> str:
+    """Return the matched source for a Semgrep result.
+
+    Uses Semgrep's ``extra.lines`` when it carries real source; otherwise (Semgrep
+    OSS without login reports ``"requires login"``) reads the matched line range
+    from the file itself, so snippets and baseline fingerprints reflect the code.
+    """
+    snippet = _normalize_snippet(result.get("extra", {}).get("lines", ""))
+    if snippet and snippet != _SNIPPET_PLACEHOLDER:
+        return snippet
+
+    path = str(result.get("path", ""))
+    start = int(result.get("start", {}).get("line", 0) or 0)
+    end = int(result.get("end", {}).get("line", start) or start)
+    if not path or start < 1:
+        return ""
+    if path not in cache:
+        try:
+            cache[path] = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            cache[path] = None
+    lines = cache[path]
+    if lines is None:
+        return ""
+    end = min(max(end, start), start + _MAX_SNIPPET_LINES - 1, len(lines))
+    return "\n".join(lines[start - 1 : end]).strip()
 
 
 def _normalize_snippet(lines: Any) -> str:

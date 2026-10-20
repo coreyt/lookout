@@ -264,3 +264,106 @@ def test_build_semgrep_command_no_git_ignore_flag() -> None:
     assert "--no-git-ignore" in with_flag
     assert "--no-git-ignore" not in without
     assert with_flag[-1] == "src"
+
+
+def _placeholder_output(path: str, start: int, end: int | None = None) -> str:
+    result: dict[str, object] = {
+        "check_id": "arch-001-impl",
+        "path": path,
+        "start": {"line": start},
+        "extra": {"message": "m", "lines": "requires login"},
+    }
+    if end is not None:
+        result["end"] = {"line": end}
+    return json.dumps({"results": [result]})
+
+
+def test_parse_semgrep_output_reads_source_when_lines_withheld(tmp_path) -> None:
+    source = tmp_path / "app.py"
+    source.write_text("import requests\n\nresp = requests.get(url)\nprint(resp)\n")
+    spec = _spec_for(ForbiddenCheck(type="forbidden", pattern="eval($X)"))
+
+    findings, _, _ = parse_semgrep_output(
+        _placeholder_output(str(source), 3, 3), {"ARCH-001": spec}
+    )
+
+    assert findings[0].snippet == "resp = requests.get(url)"
+
+
+def test_parse_semgrep_output_reads_multiline_range(tmp_path) -> None:
+    source = tmp_path / "app.py"
+    source.write_text("a = 1\nb = call(\n    x,\n)\nc = 3\n")
+    spec = _spec_for(ForbiddenCheck(type="forbidden", pattern="eval($X)"))
+
+    findings, _, _ = parse_semgrep_output(
+        _placeholder_output(str(source), 2, 4), {"ARCH-001": spec}
+    )
+
+    assert findings[0].snippet == "b = call(\n    x,\n)"
+
+
+def test_parse_semgrep_output_caps_long_snippets(tmp_path) -> None:
+    source = tmp_path / "app.py"
+    source.write_text("".join(f"line{i}\n" for i in range(1, 101)))
+    spec = _spec_for(ForbiddenCheck(type="forbidden", pattern="eval($X)"))
+
+    findings, _, _ = parse_semgrep_output(
+        _placeholder_output(str(source), 1, 100), {"ARCH-001": spec}
+    )
+
+    assert findings[0].snippet.splitlines() == [f"line{i}" for i in range(1, 21)]
+
+
+def test_parse_semgrep_output_missing_file_gives_empty_snippet(tmp_path) -> None:
+    spec = _spec_for(ForbiddenCheck(type="forbidden", pattern="eval($X)"))
+
+    findings, _, _ = parse_semgrep_output(
+        _placeholder_output(str(tmp_path / "gone.py"), 3), {"ARCH-001": spec}
+    )
+
+    assert findings[0].snippet == ""
+
+
+def test_withheld_snippets_give_distinct_baseline_fingerprints(tmp_path) -> None:
+    from lookout.baseline import Baseline, filter_findings
+
+    source = tmp_path / "app.py"
+    source.write_text("print('a')\nprint('b')\n")
+    spec = _spec_for(ForbiddenCheck(type="forbidden", pattern="eval($X)"))
+    output = json.dumps(
+        {
+            "results": [
+                {
+                    "check_id": "arch-001-impl",
+                    "path": str(source),
+                    "start": {"line": n},
+                    "end": {"line": n},
+                    "extra": {"message": "m", "lines": "requires login"},
+                }
+                for n in (1, 2)
+            ]
+        }
+    )
+    findings, _, _ = parse_semgrep_output(output, {"ARCH-001": spec})
+    baseline = Baseline.from_findings(findings[:1])
+
+    # A new violation inserted above the known one must be the one reported.
+    source.write_text("print('new')\nprint('a')\nprint('b')\n")
+    shifted = json.dumps(
+        {
+            "results": [
+                {
+                    "check_id": "arch-001-impl",
+                    "path": str(source),
+                    "start": {"line": n},
+                    "end": {"line": n},
+                    "extra": {"message": "m", "lines": "requires login"},
+                }
+                for n in (1, 2, 3)
+            ]
+        }
+    )
+    new_findings, _, _ = parse_semgrep_output(shifted, {"ARCH-001": spec})
+    remaining = filter_findings(new_findings, baseline)
+
+    assert [f.snippet for f in remaining] == ["print('new')", "print('b')"]

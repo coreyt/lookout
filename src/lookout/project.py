@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,8 @@ _SKIP_DIRS = {
     "dist",
     "build",
     ".tox",
+    "target",
+    "site-packages",
 }
 
 # Source extensions → Semgrep language name.
@@ -100,6 +103,7 @@ _FRAMEWORK_ALIASES = {
 }
 
 _MAX_FILES_SCANNED = 20000
+_MAX_MANIFESTS = 200
 
 
 def normalize_name(name: str) -> str:
@@ -145,21 +149,38 @@ class ProjectProfile:
 def detect_profile(targets: list[Path]) -> ProjectProfile:
     """Detect languages and frameworks from manifests and source files under ``targets``.
 
-    Manifests are looked up in each target (or its parent directories up to the
-    current working directory) so that ``lookout check --target src`` still finds
-    ``pyproject.toml`` at the repository root.
+    Files are enumerated with ``git ls-files`` when a target is inside a git work
+    tree, so ignored build output and data directories are never walked; outside
+    git, a directory walk that skips common vendor/build directories is used.
+    Manifests are read wherever they appear among those files (e.g.
+    ``src/ts/tsconfig.json``), and also in the targets' parent directories up to
+    the current working directory, so ``--target src`` still finds a root
+    ``pyproject.toml``.
     """
     profile = ProjectProfile()
-    roots = _manifest_roots(targets)
+    files = _list_files(targets)
 
-    for root in roots:
-        for manifest, langs in _MANIFEST_LANGUAGES.items():
-            path = root / manifest
-            if path.is_file():
-                profile.languages.update(langs)
-                profile.dependencies.update(_read_dependencies(path))
+    manifests: list[Path] = []
+    for root in _manifest_roots(targets):
+        manifests.extend(root / name for name in _MANIFEST_LANGUAGES if (root / name).is_file())
+    manifests.extend(path for path in files if path.name in _MANIFEST_LANGUAGES)
 
-    profile.languages.update(_scan_source_languages(targets))
+    seen_manifests: set[Path] = set()
+    for manifest in manifests:
+        resolved = manifest.resolve()
+        if resolved in seen_manifests or _in_skipped_dir(manifest):
+            continue
+        seen_manifests.add(resolved)
+        if len(seen_manifests) > _MAX_MANIFESTS:
+            logger.debug("More than %d manifests found; ignoring the rest", _MAX_MANIFESTS)
+            break
+        profile.languages.update(_MANIFEST_LANGUAGES[manifest.name])
+        profile.dependencies.update(_read_dependencies(manifest))
+
+    for path in files:
+        lang = _EXTENSION_LANGUAGES.get(path.suffix)
+        if lang:
+            profile.languages.add(lang)
 
     for dep in profile.dependencies:
         if dep in _FRAMEWORK_ALIASES:
@@ -188,25 +209,60 @@ def _manifest_roots(targets: list[Path]) -> list[Path]:
     return roots
 
 
-def _scan_source_languages(targets: list[Path]) -> set[str]:
-    found: set[str] = set()
-    seen = 0
+def _list_files(targets: list[Path]) -> list[Path]:
+    """List candidate files under ``targets``, honouring ``.gitignore`` when possible."""
+    files: list[Path] = []
     for target in targets:
         if target.is_file():
-            lang = _EXTENSION_LANGUAGES.get(target.suffix)
-            if lang:
-                found.add(lang)
+            files.append(target)
             continue
-        for _dirpath, dirnames, filenames in os.walk(target):
-            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
-            for name in filenames:
-                seen += 1
-                lang = _EXTENSION_LANGUAGES.get(os.path.splitext(name)[1])
-                if lang:
-                    found.add(lang)
-                if seen >= _MAX_FILES_SCANNED:
-                    return found
-    return found
+        tracked = _git_list_files(target)
+        if tracked is not None:
+            files.extend(tracked)
+        else:
+            files.extend(_walk_files(target))
+    return files
+
+
+def _git_list_files(directory: Path) -> list[Path] | None:
+    """Tracked and untracked-but-not-ignored files under ``directory``, or None outside git."""
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(directory),
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+            ],
+            capture_output=True,
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    names = result.stdout.decode("utf-8", errors="replace").split("\0")
+    return [directory / name for name in names if name]
+
+
+def _walk_files(directory: Path) -> list[Path]:
+    files: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(directory):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        for name in filenames:
+            files.append(Path(dirpath) / name)
+            if len(files) >= _MAX_FILES_SCANNED:
+                logger.debug("Stopped scanning %s after %d files", directory, _MAX_FILES_SCANNED)
+                return files
+    return files
+
+
+def _in_skipped_dir(path: Path) -> bool:
+    return any(part in _SKIP_DIRS for part in path.parts[:-1])
 
 
 def _read_dependencies(manifest: Path) -> set[str]:
@@ -220,6 +276,8 @@ def _read_dependencies(manifest: Path) -> set[str]:
             return _package_json_dependencies(manifest)
         if manifest.name == "Pipfile":
             return _pipfile_dependencies(manifest)
+        if manifest.name == "Cargo.toml":
+            return _cargo_dependencies(manifest)
     except Exception as exc:  # noqa: BLE001 — detection must never abort a scan
         logger.debug("Could not read dependencies from %s: %s", manifest, exc)
     return set()
@@ -268,6 +326,20 @@ def _pipfile_dependencies(path: Path) -> set[str]:
     deps: set[str] = set()
     for key in ("packages", "dev-packages"):
         deps.update(normalize_name(d) for d in data.get(key, {}))
+    return deps
+
+
+def _cargo_dependencies(path: Path) -> set[str]:
+    with path.open("rb") as handle:
+        data = tomllib.load(handle)
+    deps: set[str] = set()
+    sections = [data, data.get("workspace", {})]
+    for section in sections:
+        for key in ("dependencies", "dev-dependencies", "build-dependencies"):
+            deps.update(normalize_name(d) for d in section.get(key, {}))
+    for target in data.get("target", {}).values():
+        for key in ("dependencies", "dev-dependencies"):
+            deps.update(normalize_name(d) for d in target.get(key, {}))
     return deps
 
 

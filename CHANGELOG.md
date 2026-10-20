@@ -4,6 +4,33 @@ All notable changes to Lookout are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/); before 1.0, minor and patch
 releases may include breaking changes, which are called out below.
 
+## [0.1.2] — 2026-10-19
+
+### Fixed
+
+- **Snippets and baseline fingerprints contained no code.** Semgrep OSS reports
+  the matched source as `"requires login"` unless you are logged in, so every
+  snippet was that placeholder and baseline fingerprints fell back to
+  occurrence order within a file. Lookout now reads the matched lines from the
+  source file (up to 20 lines). Baselines written by 0.1.1 should be
+  re-created with `lookout check --update-baseline`.
+- **Language and framework detection missed parts of large repositories.**
+  Detection now lists files with `git ls-files` (respecting `.gitignore`)
+  instead of walking every directory, so ignored build or data output no
+  longer exhausts the scan budget. Manifests are read wherever they appear in
+  the project (e.g. `src/ts/tsconfig.json`, `src/python/pyproject.toml`), not
+  only along the target's parent directories. Outside git, the walk also skips
+  `target/` and `site-packages/`.
+- **DI-001 flagged any call made in `__init__`**, such as
+  `os.environ.get(...)`, `len(...)` and `np.asarray(...)`. It now flags only
+  class instantiations (CapWords callee, excluding value types like `Path`),
+  and reports the assignment line instead of the `class` line.
+
+### Added
+
+- Dependencies are read from `Cargo.toml` (`dependencies`, `dev-dependencies`,
+  `build-dependencies`, `[workspace.dependencies]` and target-specific tables).
+
 ## [0.1.1] — 2026-10-19
 
 ### Breaking

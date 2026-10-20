@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from lookout.models import (
     ForbiddenCheck,
@@ -153,6 +156,95 @@ class TestDetectProfile:
 
         assert not profile.detected
         assert "running all variants" in profile.describe()
+
+
+def _git_init(path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+
+
+class TestDetectProfileLargeRepos:
+    """Regressions found running against a large mixed-language monorepo."""
+
+    def test_git_repo_ignores_gitignored_dirs(self, tmp_path: Path, monkeypatch) -> None:
+        # Ignored build/data output must not exhaust the scan budget before real sources.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("lookout.project._MAX_FILES_SCANNED", 5)
+        _git_init(tmp_path)
+        (tmp_path / ".gitignore").write_text("data/\n")
+        (tmp_path / "data").mkdir()
+        for i in range(50):
+            (tmp_path / "data" / f"f{i}.json").write_text("{}")
+        (tmp_path / "src" / "ts").mkdir(parents=True)
+        (tmp_path / "src" / "ts" / "index.ts").write_text("export const x = 1;\n")
+
+        profile = detect_profile([Path(".")])
+
+        assert "typescript" in profile.languages
+
+    def test_nested_manifests_are_read(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        _git_init(tmp_path)
+        (tmp_path / "src" / "ts").mkdir(parents=True)
+        (tmp_path / "src" / "ts" / "tsconfig.json").write_text("{}")
+        (tmp_path / "src" / "python").mkdir(parents=True)
+        (tmp_path / "src" / "python" / "pyproject.toml").write_text(
+            '[project]\nname = "p"\ndependencies = ["fastapi", "SQLAlchemy>=2"]\n'
+        )
+
+        profile = detect_profile([Path(".")])
+
+        assert {"typescript", "python"} <= profile.languages
+        assert profile.has_framework("fastapi")
+        assert profile.has_framework("sqlalchemy")
+
+    def test_manifests_in_node_modules_are_ignored(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "node_modules" / "pkg").mkdir(parents=True)
+        (tmp_path / "node_modules" / "pkg" / "package.json").write_text(
+            json.dumps({"dependencies": {"@angular/core": "17"}})
+        )
+        (tmp_path / "app.py").write_text("x = 1\n")
+
+        profile = detect_profile([Path(".")])
+
+        assert profile.languages == {"python"}
+        assert not profile.has_framework("angular")
+
+    def test_walk_outside_git_skips_rust_target_dir(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("lookout.project._git_list_files", lambda directory: None)
+        (tmp_path / "target" / "debug").mkdir(parents=True)
+        (tmp_path / "target" / "debug" / "build.js").write_text("x\n")
+        (tmp_path / "lib.rs").write_text("fn main() {}\n")
+
+        profile = detect_profile([Path(".")])
+
+        assert profile.languages == {"rust"}
+
+    def test_cargo_dependencies(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "Cargo.toml").write_text(
+            "[workspace]\nmembers = []\n\n"
+            '[workspace.dependencies]\ntokio = { version = "1" }\n\n'
+            '[dependencies]\nserde_json = "1"\n\n'
+            '[dev-dependencies]\nproptest = "1"\n\n'
+            "[target.'cfg(unix)'.dependencies]\nnix = \"0.27\"\n"
+        )
+
+        profile = detect_profile([Path(".")])
+
+        assert "rust" in profile.languages
+        assert {"tokio", "serde-json", "proptest", "nix"} <= profile.dependencies
+
+    @pytest.mark.parametrize("bad", ["not toml [[[", "{not json"])
+    def test_malformed_manifest_does_not_abort(self, tmp_path: Path, monkeypatch, bad) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "pyproject.toml").write_text(bad)
+        (tmp_path / "package.json").write_text(bad)
+
+        profile = detect_profile([Path(".")])
+
+        assert {"python", "javascript"} <= profile.languages
 
 
 class TestSelectSpecs:

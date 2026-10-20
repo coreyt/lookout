@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lookout-tui"
-version = "0.1.1"
+version = "0.1.2"
 description = "Terminal UI for Lookout governance-as-code platform"
 requires-python = ">=3.10"
 license = "Elastic-2.0"
