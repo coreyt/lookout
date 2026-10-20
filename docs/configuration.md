@@ -164,7 +164,7 @@ This means:
 
 ## Migration from Old Default
 
-**Prior to v0.2.0**, the default `rules_dir` was `"rules"`. If you have an existing project:
+**In pre-0.1.0 builds** (when the project was still named `sine`), the default `rules_dir` was `"rules"`. If you have a project set up with one of those builds:
 
 - **If you have a config file**: No changes needed (explicit `rules_dir` preserved)
 - **If you don't have a config**: Run `lookout init` or create `lookout.toml` with `rules_dir = "rules"`
