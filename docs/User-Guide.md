@@ -112,6 +112,32 @@ build on its own. The discovered severity still drives the pattern's tier.
 Once you have reviewed the rule, raise it in the YAML or pass
 `--severity error` at promotion time.
 
+### Check Rules Against a Licensed Corpus
+
+Rules in the Semgrep Registry are under the Semgrep Rules License, which is not
+an open-source license. `lookout similarity` checks that Lookout's built-in,
+user and generated rules are not copies of such rules:
+
+```bash
+git clone --depth 1 https://github.com/semgrep/semgrep-rules /tmp/semgrep-rules
+uv run lookout similarity --corpus /tmp/semgrep-rules
+```
+
+For each Lookout rule it reports the closest reference rule and two scores:
+
+- **pattern**: share of the rule's pattern token sequences found in the reference
+  rule, after renaming metavariables (`$X`, `$FOO` → `$1`, `$2`) so renaming
+  cannot hide a copy;
+- **message**: share of the rule's message word sequences found in the
+  reference message.
+
+Identical non-trivial patterns are listed separately. Rules too generic to judge
+(for example a bare `print(...)` with a short message) are marked `small` and
+never flagged. The command exits 1 if any rule reaches `--threshold` (default
+0.7) or shares an identical pattern; use `--format json` in CI.
+
+The corpus is only read from disk. Do not commit it to this repository.
+
 ### Configuration
 
 Lookout reads configuration from `lookout.toml` or `pyproject.toml`:

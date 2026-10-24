@@ -4,6 +4,15 @@ All notable changes to Lookout are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/); before 1.0, minor and patch
 releases may include breaking changes, which are called out below.
 
+## [Unreleased]
+
+### Added
+
+- `lookout similarity --corpus DIR`: compares every Lookout rule against a
+  reference rule corpus (e.g. a local clone of the Semgrep Registry) and flags
+  close copies by pattern and message containment, with metavariable renaming
+  normalized. Exits 1 when a rule is flagged.
+
 ## [0.1.2] — 2026-10-19
 
 ### Fixed

@@ -207,6 +207,59 @@ def check(
 
 @cli.command()
 @click.option(
+    "--corpus",
+    "corpus_dir",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Directory of reference rules, e.g. a local clone of semgrep/semgrep-rules",
+)
+@click.option(
+    "--rules-dir",
+    type=click.Path(path_type=Path),
+    help="Directory containing user rule specifications (built-ins are always included)",
+)
+@click.option(
+    "--threshold",
+    type=click.FloatRange(0.0, 1.0),
+    default=0.7,
+    show_default=True,
+    help="Flag rules whose pattern or message containment reaches this score",
+)
+@click.option("--format", "output_format", type=click.Choice(["text", "json"]), default="text")
+def similarity(
+    corpus_dir: Path, rules_dir: Path | None, threshold: float, output_format: str
+) -> None:
+    """Check Lookout rules for close resemblance to a reference rule corpus.
+
+    Use it to make sure built-in, user and generated rules are not copies of
+    rules under a restrictive license (such as the Semgrep Registry). The corpus
+    is only read; exits 1 if any rule is flagged.
+    """
+    import json
+
+    from lookout.similarity import compare, format_report, load_corpus, lookout_rules, report_json
+
+    config = click.get_current_context().obj["config"]
+    final_rules_dir = rules_dir or config.rules_dir
+    specs = load_all_rules(user_rules_dir=final_rules_dir if final_rules_dir.exists() else None)
+
+    corpus = load_corpus(corpus_dir)
+    if not corpus:
+        click.echo(f"No Semgrep rules found under {corpus_dir}", err=True)
+        sys.exit(2)
+
+    matches = compare(lookout_rules(specs), corpus)
+    if output_format == "json":
+        click.echo(json.dumps(report_json(matches, threshold), indent=2))
+    else:
+        click.echo(format_report(matches, len(corpus), threshold))
+
+    if any(m.flagged(threshold) for m in matches):
+        sys.exit(1)
+
+
+@cli.command()
+@click.option(
     "--rules-dir",
     type=click.Path(path_type=Path),
     help="Directory containing pattern discovery specifications",
