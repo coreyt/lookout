@@ -450,7 +450,7 @@ config.py:85   - ToolConfig
 config.py:104  - GitHubConfig
 config.py:130  - CacheConfig
 config.py:167  - HeadingLevels
-config.py:183  - OnePLMMetadata
+config.py:183  - DocManMetadata
 config.py:213  - MarkdownOutputConfig
 config.py:233  - DocxTemplateConfig
 config.py:246  - DocxOutputConfig
